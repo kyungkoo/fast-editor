@@ -15,6 +15,7 @@ pub enum EditorError {
     MissingBuffer(BufferId),
     InvalidPath,
     InvalidUtf8,
+    MissingPath(BufferId),
 }
 
 impl fmt::Display for EditorError {
@@ -24,6 +25,7 @@ impl fmt::Display for EditorError {
             EditorError::MissingBuffer(id) => write!(f, "missing buffer {id}"),
             EditorError::InvalidPath => write!(f, "invalid path"),
             EditorError::InvalidUtf8 => write!(f, "invalid utf-8"),
+            EditorError::MissingPath(id) => write!(f, "missing path for buffer {id}"),
         }
     }
 }
@@ -39,14 +41,14 @@ impl From<std::io::Error> for EditorError {
 #[derive(Debug, Clone)]
 pub struct BufferSnapshot {
     pub id: BufferId,
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
     pub text: String,
     pub dirty: bool,
 }
 
 #[derive(Debug, Clone)]
 struct Buffer {
-    path: PathBuf,
+    path: Option<PathBuf>,
     text: String,
     saved_text: String,
 }
@@ -65,6 +67,19 @@ impl EditorCore {
         }
     }
 
+    pub fn new_file(&mut self) -> BufferId {
+        let id = self.allocate_buffer_id();
+        self.buffers.insert(
+            id,
+            Buffer {
+                path: None,
+                text: String::new(),
+                saved_text: String::new(),
+            },
+        );
+        id
+    }
+
     pub fn open_file(&mut self, path: impl AsRef<Path>) -> Result<BufferId, EditorError> {
         let path = path.as_ref().to_path_buf();
         let text = fs::read_to_string(&path)?;
@@ -72,7 +87,7 @@ impl EditorCore {
         self.buffers.insert(
             id,
             Buffer {
-                path,
+                path: Some(path),
                 saved_text: text.clone(),
                 text,
             },
@@ -96,7 +111,24 @@ impl EditorCore {
 
     pub fn save_file(&mut self, buffer_id: BufferId) -> Result<(), EditorError> {
         let buffer = self.buffer_mut(buffer_id)?;
-        fs::write(&buffer.path, &buffer.text)?;
+        let path = buffer
+            .path
+            .as_ref()
+            .ok_or(EditorError::MissingPath(buffer_id))?;
+        fs::write(path, &buffer.text)?;
+        buffer.saved_text = buffer.text.clone();
+        Ok(())
+    }
+
+    pub fn save_file_as(
+        &mut self,
+        buffer_id: BufferId,
+        path: impl AsRef<Path>,
+    ) -> Result<(), EditorError> {
+        let path = path.as_ref().to_path_buf();
+        let buffer = self.buffer_mut(buffer_id)?;
+        fs::write(&path, &buffer.text)?;
+        buffer.path = Some(path);
         buffer.saved_text = buffer.text.clone();
         Ok(())
     }
@@ -104,6 +136,10 @@ impl EditorCore {
     pub fn is_dirty(&self, buffer_id: BufferId) -> Result<bool, EditorError> {
         self.buffer(buffer_id)
             .map(|buffer| buffer.text != buffer.saved_text)
+    }
+
+    pub fn path(&self, buffer_id: BufferId) -> Result<Option<&Path>, EditorError> {
+        self.buffer(buffer_id).map(|buffer| buffer.path.as_deref())
     }
 
     pub fn snapshot(&self, buffer_id: BufferId) -> Result<BufferSnapshot, EditorError> {
@@ -191,6 +227,20 @@ fn path_from_c(path: *const c_char) -> Result<PathBuf, EditorError> {
 }
 
 #[no_mangle]
+pub extern "C" fn fe_new_file() -> BufferId {
+    match global_core().lock() {
+        Ok(mut core) => {
+            clear_last_error();
+            core.new_file()
+        }
+        Err(_) => {
+            set_last_error(EditorError::InvalidPath);
+            0
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_open_file(path: *const c_char) -> BufferId {
     let result = path_from_c(path).and_then(|path| {
         global_core()
@@ -222,6 +272,32 @@ pub extern "C" fn fe_get_text(buffer_id: BufferId) -> FeString {
         Ok(text) => {
             clear_last_error();
             FeString::from_string(text)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fe_get_path(buffer_id: BufferId) -> FeString {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|core| {
+            core.path(buffer_id)
+                .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+        });
+
+    match result {
+        Ok(Some(path)) => {
+            clear_last_error();
+            FeString::from_string(path)
+        }
+        Ok(None) => {
+            clear_last_error();
+            FeString::empty()
         }
         Err(error) => {
             set_last_error(error);
@@ -270,6 +346,27 @@ pub extern "C" fn fe_save_file(buffer_id: BufferId) -> i32 {
         .lock()
         .map_err(|_| EditorError::MissingBuffer(buffer_id))
         .and_then(|mut core| core.save_file(buffer_id));
+
+    match result {
+        Ok(()) => {
+            clear_last_error();
+            1
+        }
+        Err(error) => {
+            set_last_error(error);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fe_save_file_as(buffer_id: BufferId, path: *const c_char) -> i32 {
+    let result = path_from_c(path).and_then(|path| {
+        global_core()
+            .lock()
+            .map_err(|_| EditorError::MissingBuffer(buffer_id))?
+            .save_file_as(buffer_id, path)
+    });
 
     match result {
         Ok(()) => {
@@ -345,7 +442,19 @@ mod tests {
 
         assert_eq!(core.get_text(buffer_id).expect("buffer text"), "hello");
         assert!(!core.snapshot(buffer_id).expect("snapshot").dirty);
+        assert_eq!(core.path(buffer_id).expect("path"), Some(path.as_path()));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn new_file_creates_empty_clean_untitled_buffer() {
+        let mut core = EditorCore::new();
+
+        let buffer_id = core.new_file();
+
+        assert_eq!(core.get_text(buffer_id).expect("buffer text"), "");
+        assert!(!core.is_dirty(buffer_id).expect("dirty state"));
+        assert!(core.path(buffer_id).expect("path").is_none());
     }
 
     #[test]
@@ -379,6 +488,47 @@ mod tests {
 
         assert!(!core.is_dirty(buffer_id).expect("dirty state"));
         assert!(!core.snapshot(buffer_id).expect("snapshot").dirty);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn untitled_buffer_clears_dirty_when_replaced_with_empty_baseline() {
+        let mut core = EditorCore::new();
+        let buffer_id = core.new_file();
+
+        core.replace_text(buffer_id, "draft").expect("replace text");
+        assert!(core.is_dirty(buffer_id).expect("dirty state"));
+
+        core.replace_text(buffer_id, "").expect("replace text");
+
+        assert!(!core.is_dirty(buffer_id).expect("dirty state"));
+    }
+
+    #[test]
+    fn save_file_without_path_returns_missing_path() {
+        let mut core = EditorCore::new();
+        let buffer_id = core.new_file();
+
+        let error = core.save_file(buffer_id).expect_err("missing path error");
+
+        assert!(matches!(error, EditorError::MissingPath(id) if id == buffer_id));
+    }
+
+    #[test]
+    fn save_file_as_assigns_path_writes_to_disk_and_updates_baseline() {
+        let path = make_temp_path("save_file_as_assigns_path_writes_to_disk", "txt");
+        let mut core = EditorCore::new();
+        let buffer_id = core.new_file();
+
+        core.replace_text(buffer_id, "draft").expect("replace text");
+        core.save_file_as(buffer_id, &path).expect("save file as");
+
+        assert_eq!(core.path(buffer_id).expect("path"), Some(path.as_path()));
+        assert_eq!(fs::read_to_string(&path).expect("read file"), "draft");
+        assert!(!core.is_dirty(buffer_id).expect("dirty state"));
+
+        core.replace_text(buffer_id, "next").expect("replace text");
+        assert!(core.is_dirty(buffer_id).expect("dirty state"));
         let _ = fs::remove_file(path);
     }
 
@@ -454,6 +604,66 @@ mod tests {
     }
 
     #[test]
+    fn ffi_new_file_creates_empty_clean_untitled_buffer() {
+        let _guard = ffi_test_lock();
+        let buffer_id = fe_new_file();
+
+        assert_ne!(buffer_id, 0);
+        assert_eq!(take_ffi_string(fe_get_text(buffer_id)), "");
+        assert_eq!(take_ffi_string(fe_get_path(buffer_id)), "");
+        assert_eq!(fe_is_dirty(buffer_id), 0);
+    }
+
+    #[test]
+    fn ffi_untitled_buffer_dirty_state_tracks_empty_baseline() {
+        let _guard = ffi_test_lock();
+        let buffer_id = fe_new_file();
+
+        assert_ne!(buffer_id, 0);
+        assert_eq!(ffi_replace_text(buffer_id, "draft"), 1);
+        assert_eq!(fe_is_dirty(buffer_id), 1);
+
+        assert_eq!(ffi_replace_text(buffer_id, ""), 1);
+        assert_eq!(fe_is_dirty(buffer_id), 0);
+    }
+
+    #[test]
+    fn ffi_save_file_as_assigns_path_and_updates_dirty_baseline() {
+        let _guard = ffi_test_lock();
+        let path = make_temp_path(
+            "ffi_save_file_as_assigns_path_and_updates_dirty_baseline",
+            "txt",
+        );
+        let buffer_id = fe_new_file();
+
+        assert_ne!(buffer_id, 0);
+        assert_eq!(ffi_replace_text(buffer_id, "draft"), 1);
+        assert_eq!(fe_is_dirty(buffer_id), 1);
+
+        assert_eq!(ffi_save_file_as(buffer_id, &path), 1);
+        assert_eq!(fe_is_dirty(buffer_id), 0);
+        assert_eq!(
+            take_ffi_string(fe_get_path(buffer_id)),
+            path.to_string_lossy()
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read file"), "draft");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ffi_save_file_reports_missing_path_for_untitled_buffer() {
+        let _guard = ffi_test_lock();
+        let buffer_id = fe_new_file();
+
+        assert_ne!(buffer_id, 0);
+        assert_eq!(fe_save_file(buffer_id), 0);
+        assert_eq!(
+            take_ffi_string(fe_last_error()),
+            format!("missing path for buffer {buffer_id}")
+        );
+    }
+
+    #[test]
     fn ffi_editing_back_to_saved_text_clears_dirty_state() {
         let _guard = ffi_test_lock();
         let path = write_temp_file(
@@ -510,6 +720,11 @@ mod tests {
 
     fn ffi_replace_text(buffer_id: BufferId, text: &str) -> i32 {
         fe_replace_text(buffer_id, text.as_ptr(), text.len())
+    }
+
+    fn ffi_save_file_as(buffer_id: BufferId, path: &Path) -> i32 {
+        let path = CString::new(path.to_string_lossy().as_bytes()).expect("ffi path");
+        fe_save_file_as(buffer_id, path.as_ptr())
     }
 
     fn write_temp_file(name: &str, text: &str) -> PathBuf {

@@ -9,14 +9,23 @@ private struct FeString {
 @_silgen_name("fe_open_file")
 private func feOpenFile(_ path: UnsafePointer<CChar>) -> UInt64
 
+@_silgen_name("fe_new_file")
+private func feNewFile() -> UInt64
+
 @_silgen_name("fe_get_text")
 private func feGetText(_ bufferID: UInt64) -> FeString
+
+@_silgen_name("fe_get_path")
+private func feGetPath(_ bufferID: UInt64) -> FeString
 
 @_silgen_name("fe_replace_text")
 private func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
 
 @_silgen_name("fe_save_file")
 private func feSaveFile(_ bufferID: UInt64) -> Int32
+
+@_silgen_name("fe_save_file_as")
+private func feSaveFileAs(_ bufferID: UInt64, _ path: UnsafePointer<CChar>) -> Int32
 
 @_silgen_name("fe_is_dirty")
 private func feIsDirty(_ bufferID: UInt64) -> Int32
@@ -45,6 +54,10 @@ final class EditorCoreBridge: ObservableObject {
 
     var canSave: Bool {
         hasOpenBuffer && isDirty
+    }
+
+    var isUntitled: Bool {
+        hasOpenBuffer && fileURL == nil
     }
 
     var textBinding: Binding<String> {
@@ -86,19 +99,62 @@ final class EditorCoreBridge: ObservableObject {
         statusText = "Opened \(url.path)"
     }
 
-    func save() {
-        guard hasOpenBuffer else {
+    func newFile() {
+        let newID = feNewFile()
+
+        guard newID != 0 else {
+            reportLastError(prefix: "New file failed")
             return
+        }
+
+        bufferID = newID
+        fileURL = nil
+        syncTextFromCore()
+        syncDirtyState()
+        focusRevision += 1
+        statusText = "New untitled file"
+    }
+
+    func save() -> Bool {
+        guard hasOpenBuffer else {
+            return false
+        }
+
+        if isUntitled {
+            return false
         }
 
         replaceText(text)
         guard feSaveFile(bufferID) != 0 else {
             reportLastError(prefix: "Save failed")
-            return
+            return false
         }
 
         syncDirtyState()
         statusText = "Saved \(displayPath)"
+        return true
+    }
+
+    func saveAs(url: URL) -> Bool {
+        guard hasOpenBuffer else {
+            return false
+        }
+
+        replaceText(text)
+        let result = url.path.withCString { path in
+            feSaveFileAs(bufferID, path)
+        }
+
+        guard result != 0 else {
+            reportLastError(prefix: "Save failed")
+            return false
+        }
+
+        fileURL = url
+        syncPathFromCore()
+        syncDirtyState()
+        statusText = "Saved \(displayPath)"
+        return true
     }
 
     private func syncTextFromCore() {
@@ -119,6 +175,26 @@ final class EditorCoreBridge: ObservableObject {
         isSyncingFromCore = true
         text = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
         isSyncingFromCore = false
+    }
+
+    private func syncPathFromCore() {
+        guard hasOpenBuffer else {
+            fileURL = nil
+            return
+        }
+
+        let value = feGetPath(bufferID)
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr, value.len > 0 else {
+            fileURL = nil
+            return
+        }
+
+        let path = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
+        fileURL = URL(fileURLWithPath: path)
     }
 
     private func replaceText(_ newText: String) {
@@ -170,6 +246,6 @@ final class EditorCoreBridge: ObservableObject {
     }
 
     private var displayPath: String {
-        fileURL?.path ?? "file"
+        fileURL?.path ?? "Untitled"
     }
 }

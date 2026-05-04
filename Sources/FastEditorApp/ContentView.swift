@@ -23,13 +23,18 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
+            Button("New File") {
+                editor.newFile()
+            }
+            .keyboardShortcut("n")
+
             Button("Open...") {
                 openFile()
             }
             .keyboardShortcut("o")
 
             Button("Save") {
-                editor.save()
+                saveFile()
             }
             .keyboardShortcut("s")
             .disabled(!editor.canSave)
@@ -59,6 +64,20 @@ struct ContentView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             editor.open(url: url)
+        }
+    }
+
+    private func saveFile() {
+        if editor.isUntitled {
+            let panel = NSSavePanel()
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = "Untitled.txt"
+
+            if panel.runModal() == .OK, let url = panel.url {
+                _ = editor.saveAs(url: url)
+            }
+        } else {
+            _ = editor.save()
         }
     }
 }
