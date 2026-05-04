@@ -13,12 +13,24 @@ with external developer agents such as Codex, Claude Code, and Gemini.
 
 The first milestone is a vertical slice:
 
+- Prove a native app and Rust editor core bootstrap first:
+  - Scaffold the macOS app shell and Rust workspace.
+  - Add an `editor_core` crate with file load, buffer, basic edit, and save APIs.
+  - Add the thinnest practical Swift-Rust bridge smoke test.
+  - Prove the loop: open a file, manage contents through Rust core, display it
+    in the app, edit it, and save it back to disk.
 - Launch a native macOS app.
 - Open a file or folder.
 - Manage file contents through the Rust editor core.
 - Render and edit text in a Metal-backed editor view.
 - Save edits back to disk.
 - Show basic syntax highlighting.
+- Support Markdown as a first-class editing format:
+  - Highlight Markdown syntax.
+  - Provide editing ergonomics for headings, lists, links, code fences, and
+    block quotes.
+  - Show a side-by-side or toggleable Markdown preview.
+  - Update preview from the current buffer state, not only from saved files.
 - Open an AI Agent Panel.
 - Detect an available external AI CLI or agent.
 - Send current file or selection context to the agent.
@@ -49,6 +61,7 @@ Keep these areas platform-neutral where practical:
 - Buffer and rope data structures.
 - Selection, cursor, undo, and redo.
 - Tree-sitter parsing and syntax token models.
+- Markdown document model, syntax tokens, and preview state where practical.
 - LSP state and protocol handling.
 - AI provider adapters.
 - Build/task provider abstractions.
