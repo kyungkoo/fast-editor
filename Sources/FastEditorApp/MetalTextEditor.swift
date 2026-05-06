@@ -4,7 +4,7 @@ import MetalKit
 import SwiftUI
 
 struct MetalTextEditor: NSViewRepresentable {
-    var text: String
+    var snapshot: EditorRenderSnapshot
     var showsInsertionPoint: Bool
 
     func makeNSView(context: Context) -> MetalTextRenderView {
@@ -12,19 +12,18 @@ struct MetalTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MetalTextRenderView, context: Context) {
-        view.text = text
+        view.snapshot = snapshot
         view.showsInsertionPoint = showsInsertionPoint
     }
 }
 
 final class MetalTextRenderView: MTKView {
-    var text = "" {
+    var snapshot = EditorRenderSnapshot.empty {
         didSet {
-            guard oldValue != text else {
+            guard oldValue != snapshot else {
                 return
             }
 
-            lines = MetalTextRenderView.splitLines(text)
             recalculateContentMetrics()
             clampScrollOffset()
             setNeedsDisplay(bounds)
@@ -45,7 +44,6 @@ final class MetalTextRenderView: MTKView {
     private let imageContext: CIContext
     private let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private let lineNumberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    private var lines = [""]
     private var scrollOffset = CGPoint.zero
     private var contentSize = CGSize.zero
 
@@ -195,7 +193,7 @@ final class MetalTextRenderView: MTKView {
     private func drawVisibleText() {
         let firstLine = max(0, Int(scrollOffset.y / lineHeight))
         let visibleLineCount = Int(ceil(bounds.height / lineHeight)) + 2
-        let endLine = min(lines.count, firstLine + visibleLineCount)
+        let endLine = min(snapshot.lines.count, firstLine + visibleLineCount)
 
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -207,8 +205,9 @@ final class MetalTextRenderView: MTKView {
         ]
 
         for lineIndex in firstLine..<endLine {
+            let line = snapshot.lines[lineIndex]
             let baselineY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y
-            let lineNumber = "\(lineIndex + 1)" as NSString
+            let lineNumber = "\(line.lineNumber)" as NSString
             let lineNumberSize = lineNumber.size(withAttributes: lineNumberAttributes)
             let lineNumberPoint = CGPoint(
                 x: gutterWidth - horizontalPadding - lineNumberSize.width,
@@ -221,12 +220,12 @@ final class MetalTextRenderView: MTKView {
                 x: gutterWidth + horizontalPadding - scrollOffset.x,
                 y: baselineY
             )
-            (lines[lineIndex] as NSString).draw(at: textPoint, withAttributes: textAttributes)
+            (line.text as NSString).draw(at: textPoint, withAttributes: textAttributes)
         }
     }
 
     private func drawInsertionPointIfNeeded(in context: CGContext) {
-        guard showsInsertionPoint, !lines.isEmpty else {
+        guard showsInsertionPoint, !snapshot.lines.isEmpty else {
             return
         }
 
@@ -246,13 +245,13 @@ final class MetalTextRenderView: MTKView {
 
     private func recalculateContentMetrics() {
         let textAttributes: [NSAttributedString.Key: Any] = [.font: font]
-        let longestLineWidth = lines.reduce(CGFloat.zero) { width, line in
-            max(width, (line as NSString).size(withAttributes: textAttributes).width)
+        let longestLineWidth = snapshot.lines.reduce(CGFloat.zero) { width, line in
+            max(width, (line.text as NSString).size(withAttributes: textAttributes).width)
         }
 
         contentSize = CGSize(
             width: gutterWidth + horizontalPadding * 2 + longestLineWidth,
-            height: verticalPadding * 2 + CGFloat(max(lines.count, 1)) * lineHeight
+            height: verticalPadding * 2 + CGFloat(max(snapshot.lines.count, 1)) * lineHeight
         )
     }
 
@@ -273,8 +272,4 @@ final class MetalTextRenderView: MTKView {
         window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
     }
 
-    private static func splitLines(_ text: String) -> [String] {
-        let lines = text.components(separatedBy: .newlines)
-        return lines.isEmpty ? [""] : lines
-    }
 }

@@ -3,6 +3,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 pub type BufferId = u64;
 
 #[derive(Debug)]
@@ -40,6 +42,22 @@ pub struct BufferSnapshot {
     pub path: Option<PathBuf>,
     pub text: String,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RenderSnapshot {
+    pub buffer_id: BufferId,
+    pub dirty: bool,
+    pub cursor_line: usize,
+    pub cursor_column: usize,
+    pub lines: Vec<RenderLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RenderLine {
+    pub index: usize,
+    pub line_number: usize,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +166,19 @@ impl EditorCore {
         })
     }
 
+    pub fn render_snapshot(&self, buffer_id: BufferId) -> Result<RenderSnapshot, EditorError> {
+        let buffer = self.buffer(buffer_id)?;
+        let lines = split_render_lines(&buffer.text);
+
+        Ok(RenderSnapshot {
+            buffer_id,
+            dirty: buffer.text != buffer.saved_text,
+            cursor_line: 0,
+            cursor_column: 0,
+            lines,
+        })
+    }
+
     fn allocate_buffer_id(&mut self) -> BufferId {
         let id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -165,4 +196,26 @@ impl EditorCore {
             .get_mut(&buffer_id)
             .ok_or(EditorError::MissingBuffer(buffer_id))
     }
+}
+
+fn split_render_lines(text: &str) -> Vec<RenderLine> {
+    let mut lines: Vec<RenderLine> = text
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| RenderLine {
+            index,
+            line_number: index + 1,
+            text: line.trim_end_matches('\r').to_owned(),
+        })
+        .collect();
+
+    if lines.is_empty() {
+        lines.push(RenderLine {
+            index: 0,
+            line_number: 1,
+            text: String::new(),
+        });
+    }
+
+    lines
 }

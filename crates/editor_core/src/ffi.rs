@@ -116,6 +116,26 @@ pub extern "C" fn fe_get_text(buffer_id: BufferId) -> FeString {
 }
 
 #[no_mangle]
+pub extern "C" fn fe_get_render_snapshot(buffer_id: BufferId) -> FeString {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|core| core.render_snapshot(buffer_id))
+        .and_then(|snapshot| serde_json::to_string(&snapshot).map_err(|_| EditorError::InvalidUtf8));
+
+    match result {
+        Ok(snapshot) => {
+            clear_last_error();
+            FeString::from_string(snapshot)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_get_path(buffer_id: BufferId) -> FeString {
     let result = global_core()
         .lock()

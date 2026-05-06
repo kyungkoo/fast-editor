@@ -134,6 +134,32 @@ fn open_file_supports_empty_files() {
 }
 
 #[test]
+fn render_snapshot_exposes_numbered_lines_and_dirty_state() {
+    let path = write_temp_file(
+        "render_snapshot_exposes_numbered_lines_and_dirty_state",
+        "one\ntwo\n",
+    );
+    let mut core = EditorCore::new();
+    let buffer_id = core.open_file(&path).expect("open file");
+
+    core.replace_text(buffer_id, "one\ntwo\nthree")
+        .expect("replace text");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.buffer_id, buffer_id);
+    assert!(snapshot.dirty);
+    assert_eq!(snapshot.cursor_line, 0);
+    assert_eq!(snapshot.cursor_column, 0);
+    assert_eq!(snapshot.lines.len(), 3);
+    assert_eq!(snapshot.lines[0].line_number, 1);
+    assert_eq!(snapshot.lines[0].text, "one");
+    assert_eq!(snapshot.lines[2].line_number, 3);
+    assert_eq!(snapshot.lines[2].text, "three");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn missing_buffer_returns_error() {
     let mut core = EditorCore::new();
 
@@ -156,6 +182,23 @@ fn failed_save_keeps_buffer_dirty() {
 
     assert!(core.save_file(buffer_id).is_err());
     assert!(core.is_dirty(buffer_id).expect("dirty state"));
+}
+
+#[test]
+fn ffi_render_snapshot_returns_json_payload() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text(buffer_id, "alpha\nbeta"), 1);
+
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+
+    assert!(snapshot.contains("\"buffer_id\":"));
+    assert!(snapshot.contains("\"line_number\":1"));
+    assert!(snapshot.contains("\"text\":\"alpha\""));
+    assert!(snapshot.contains("\"line_number\":2"));
+    assert!(snapshot.contains("\"text\":\"beta\""));
 }
 
 #[test]

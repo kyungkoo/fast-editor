@@ -29,7 +29,7 @@ struct ContentView: View {
             )
         case .metal:
             MetalTextEditor(
-                text: editor.text,
+                snapshot: editor.renderSnapshot,
                 showsInsertionPoint: editor.hasOpenBuffer
             )
         }

@@ -15,6 +15,9 @@ private func feNewFile() -> UInt64
 @_silgen_name("fe_get_text")
 private func feGetText(_ bufferID: UInt64) -> FeString
 
+@_silgen_name("fe_get_render_snapshot")
+private func feGetRenderSnapshot(_ bufferID: UInt64) -> FeString
+
 @_silgen_name("fe_get_path")
 private func feGetPath(_ bufferID: UInt64) -> FeString
 
@@ -42,6 +45,7 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var statusText = "Open a file to start editing through the Rust core."
     @Published private(set) var isDirty = false
     @Published private(set) var focusRevision = 0
+    @Published private(set) var renderSnapshot = EditorRenderSnapshot.empty
     @Published var text = ""
     @Published var errorMessage = ""
 
@@ -94,6 +98,7 @@ final class EditorCoreBridge: ObservableObject {
         bufferID = openedID
         fileURL = url
         syncTextFromCore()
+        syncRenderSnapshot()
         syncDirtyState()
         focusRevision += 1
         statusText = "Opened \(url.path)"
@@ -110,6 +115,7 @@ final class EditorCoreBridge: ObservableObject {
         bufferID = newID
         fileURL = nil
         syncTextFromCore()
+        syncRenderSnapshot()
         syncDirtyState()
         focusRevision += 1
         statusText = "New untitled file"
@@ -130,6 +136,7 @@ final class EditorCoreBridge: ObservableObject {
             return false
         }
 
+        syncRenderSnapshot()
         syncDirtyState()
         statusText = "Saved \(displayPath)"
         return true
@@ -152,6 +159,7 @@ final class EditorCoreBridge: ObservableObject {
 
         fileURL = url
         syncPathFromCore()
+        syncRenderSnapshot()
         syncDirtyState()
         statusText = "Saved \(displayPath)"
         return true
@@ -175,6 +183,31 @@ final class EditorCoreBridge: ObservableObject {
         isSyncingFromCore = true
         text = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
         isSyncingFromCore = false
+    }
+
+    private func syncRenderSnapshot() {
+        guard hasOpenBuffer else {
+            renderSnapshot = .empty
+            return
+        }
+
+        let value = feGetRenderSnapshot(bufferID)
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr else {
+            reportLastError(prefix: "Render snapshot failed")
+            return
+        }
+
+        let data = Data(bytes: pointer, count: value.len)
+
+        do {
+            renderSnapshot = try JSONDecoder().decode(EditorRenderSnapshot.self, from: data)
+        } catch {
+            errorMessage = "Render snapshot failed: \(error.localizedDescription)"
+        }
     }
 
     private func syncPathFromCore() {
@@ -210,6 +243,7 @@ final class EditorCoreBridge: ObservableObject {
         if result == 0 {
             reportLastError(prefix: "Edit failed")
         } else {
+            syncRenderSnapshot()
             syncDirtyState()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         }
@@ -247,5 +281,41 @@ final class EditorCoreBridge: ObservableObject {
 
     private var displayPath: String {
         fileURL?.path ?? "Untitled"
+    }
+}
+
+struct EditorRenderSnapshot: Decodable, Equatable {
+    var bufferID: UInt64
+    var dirty: Bool
+    var cursorLine: Int
+    var cursorColumn: Int
+    var lines: [EditorRenderLine]
+
+    static let empty = EditorRenderSnapshot(
+        bufferID: 0,
+        dirty: false,
+        cursorLine: 0,
+        cursorColumn: 0,
+        lines: [EditorRenderLine(index: 0, lineNumber: 1, text: "")]
+    )
+
+    private enum CodingKeys: String, CodingKey {
+        case bufferID = "buffer_id"
+        case dirty
+        case cursorLine = "cursor_line"
+        case cursorColumn = "cursor_column"
+        case lines
+    }
+}
+
+struct EditorRenderLine: Decodable, Equatable {
+    var index: Int
+    var lineNumber: Int
+    var text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case lineNumber = "line_number"
+        case text
     }
 }
