@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::{BufferId, EditorCore, EditorError};
+use crate::{BufferId, EditorCore, EditorError, RenderSpanKind};
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,6 +182,50 @@ fn render_snapshot_tracks_cursor_line_and_column() {
 }
 
 #[test]
+fn render_snapshot_exposes_markdown_highlight_spans() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text(
+        buffer_id,
+        "# Heading\n- item with `code`\n> quote\nA [link](https://example.com) and **bold**",
+    )
+    .expect("replace text");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.lines[0].spans.len(), 1);
+    assert_eq!(snapshot.lines[0].spans[0].start_column, 0);
+    assert_eq!(snapshot.lines[0].spans[0].end_column, 9);
+    assert_eq!(
+        snapshot.lines[0].spans[0].kind,
+        RenderSpanKind::MarkdownHeading
+    );
+
+    assert_eq!(
+        snapshot.lines[1].spans[0].kind,
+        RenderSpanKind::MarkdownListMarker
+    );
+    assert_eq!(
+        snapshot.lines[1].spans[1].kind,
+        RenderSpanKind::MarkdownInlineCode
+    );
+
+    assert_eq!(
+        snapshot.lines[2].spans[0].kind,
+        RenderSpanKind::MarkdownQuote
+    );
+    assert!(snapshot.lines[3]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::MarkdownLink));
+    assert!(snapshot.lines[3]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::MarkdownEmphasis));
+}
+
+#[test]
 fn cursor_offset_must_be_utf8_boundary() {
     let mut core = EditorCore::new();
     let buffer_id = core.new_file();
@@ -298,6 +342,21 @@ fn ffi_render_snapshot_reports_cursor_from_replace_payload() {
 
     assert!(snapshot.contains("\"cursor_line\":1"));
     assert!(snapshot.contains("\"cursor_column\":2"));
+}
+
+#[test]
+fn ffi_render_snapshot_includes_markdown_span_payload() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text(buffer_id, "# Heading\n`code`"), 1);
+
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+
+    assert!(snapshot.contains("\"spans\""));
+    assert!(snapshot.contains("\"kind\":\"markdown_heading\""));
+    assert!(snapshot.contains("\"kind\":\"markdown_inline_code\""));
 }
 
 #[test]

@@ -515,8 +515,101 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             )
             context.saveGState()
             context.clip(to: textClipRect)
-            (line.text as NSString).draw(at: textPoint, withAttributes: textAttributes)
+            drawText(line, at: textPoint, defaultAttributes: textAttributes)
             context.restoreGState()
+        }
+    }
+
+    private func drawText(
+        _ line: EditorRenderLine,
+        at point: CGPoint,
+        defaultAttributes: [NSAttributedString.Key: Any]
+    ) {
+        let characters = Array(line.text)
+        var currentColumn = 0
+
+        for span in line.spans.sorted(by: { $0.startColumn < $1.startColumn }) {
+            let startColumn = min(max(span.startColumn, currentColumn), characters.count)
+            let endColumn = min(max(span.endColumn, startColumn), characters.count)
+
+            if currentColumn < startColumn {
+                drawTextSegment(
+                    characters[currentColumn..<startColumn],
+                    linePrefix: characters[..<currentColumn],
+                    at: point,
+                    attributes: defaultAttributes
+                )
+            }
+
+            drawTextSegment(
+                characters[startColumn..<endColumn],
+                linePrefix: characters[..<startColumn],
+                at: point,
+                attributes: textAttributes(for: span.kind, defaultAttributes: defaultAttributes)
+            )
+            currentColumn = endColumn
+        }
+
+        if currentColumn < characters.count {
+            drawTextSegment(
+                characters[currentColumn..<characters.count],
+                linePrefix: characters[..<currentColumn],
+                at: point,
+                attributes: defaultAttributes
+            )
+        }
+    }
+
+    private func drawTextSegment(
+        _ segment: ArraySlice<Character>,
+        linePrefix: ArraySlice<Character>,
+        at point: CGPoint,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        guard !segment.isEmpty else {
+            return
+        }
+
+        let segmentText = String(segment)
+        let x = point.x + width(of: String(linePrefix))
+        (segmentText as NSString).draw(at: CGPoint(x: x, y: point.y), withAttributes: attributes)
+    }
+
+    private func textAttributes(
+        for kind: EditorRenderSpanKind,
+        defaultAttributes: [NSAttributedString.Key: Any]
+    ) -> [NSAttributedString.Key: Any] {
+        var attributes = defaultAttributes
+        attributes[.foregroundColor] = color(for: kind)
+
+        switch kind {
+        case .markdownHeading:
+            attributes[.font] = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
+        case .markdownCode, .markdownInlineCode:
+            attributes[.backgroundColor] = NSColor.controlBackgroundColor
+        case .markdownEmphasis:
+            attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        default:
+            break
+        }
+
+        return attributes
+    }
+
+    private func color(for kind: EditorRenderSpanKind) -> NSColor {
+        switch kind {
+        case .markdownHeading:
+            return .systemBlue
+        case .markdownListMarker:
+            return .systemOrange
+        case .markdownQuote:
+            return .systemGreen
+        case .markdownCode, .markdownInlineCode:
+            return .systemPurple
+        case .markdownLink:
+            return .systemBlue
+        case .markdownEmphasis:
+            return .systemPink
         }
     }
 
