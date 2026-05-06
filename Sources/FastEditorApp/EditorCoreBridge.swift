@@ -18,9 +18,6 @@ private func feGetText(_ bufferID: UInt64) -> FeString
 @_silgen_name("fe_get_render_snapshot")
 private func feGetRenderSnapshot(_ bufferID: UInt64) -> FeString
 
-@_silgen_name("fe_get_markdown_preview_html")
-private func feGetMarkdownPreviewHTML(_ bufferID: UInt64) -> FeString
-
 @_silgen_name("fe_get_path")
 private func feGetPath(_ bufferID: UInt64) -> FeString
 
@@ -66,7 +63,6 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var isDirty = false
     @Published private(set) var focusRevision = 0
     @Published private(set) var renderSnapshot = EditorRenderSnapshot.empty
-    @Published private(set) var markdownPreviewHTML = ""
     @Published var text = ""
     @Published var errorMessage = ""
 
@@ -120,7 +116,6 @@ final class EditorCoreBridge: ObservableObject {
         fileURL = url
         syncTextFromCore()
         syncRenderSnapshot()
-        syncMarkdownPreview()
         syncDirtyState()
         focusRevision += 1
         statusText = "Opened \(url.path)"
@@ -138,7 +133,6 @@ final class EditorCoreBridge: ObservableObject {
         fileURL = nil
         syncTextFromCore()
         syncRenderSnapshot()
-        syncMarkdownPreview()
         syncDirtyState()
         focusRevision += 1
         statusText = "New untitled file"
@@ -160,7 +154,6 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         syncRenderSnapshot()
-        syncMarkdownPreview()
         syncDirtyState()
         statusText = "Saved \(displayPath)"
         return true
@@ -184,7 +177,6 @@ final class EditorCoreBridge: ObservableObject {
         fileURL = url
         syncPathFromCore()
         syncRenderSnapshot()
-        syncMarkdownPreview()
         syncDirtyState()
         statusText = "Saved \(displayPath)"
         return true
@@ -205,7 +197,6 @@ final class EditorCoreBridge: ObservableObject {
             reportLastError(prefix: "Edit failed")
         } else {
             syncRenderSnapshot()
-            syncMarkdownPreview()
             syncDirtyState()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         }
@@ -277,25 +268,6 @@ final class EditorCoreBridge: ObservableObject {
         }
     }
 
-    private func syncMarkdownPreview() {
-        guard hasOpenBuffer else {
-            markdownPreviewHTML = ""
-            return
-        }
-
-        let value = feGetMarkdownPreviewHTML(bufferID)
-        defer {
-            feFreeString(value)
-        }
-
-        guard let pointer = value.ptr else {
-            reportLastError(prefix: "Markdown preview failed")
-            return
-        }
-
-        markdownPreviewHTML = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
-    }
-
     private func syncPathFromCore() {
         guard hasOpenBuffer else {
             fileURL = nil
@@ -330,7 +302,6 @@ final class EditorCoreBridge: ObservableObject {
             reportLastError(prefix: "Edit failed")
         } else {
             syncRenderSnapshot()
-            syncMarkdownPreview()
             syncDirtyState()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         }
@@ -345,7 +316,6 @@ final class EditorCoreBridge: ObservableObject {
         if result == 1 {
             syncTextFromCore()
             syncRenderSnapshot()
-            syncMarkdownPreview()
             syncDirtyState()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         } else if result == 0 {
