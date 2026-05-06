@@ -8,7 +8,7 @@
   },
   {
     "label": "FastEditor: Run",
-    "command": "source \"$HOME/.cargo/env\" && cargo build && swift run FastEditor",
+    "command": "./scripts/run.sh",
     "allow_concurrent_runs": false,
     "reveal": "no_focus",
     "hide": "never"
@@ -23,7 +23,7 @@
   },
   {
     "label": "FastEditor: Swift Build",
-    "command": "swift build",
+    "command": "DEVELOPER_DIR=\"${DEVELOPER_DIR:-$(xcode-select -p)}\"; SDKROOT=\"${SDKROOT:-$(DEVELOPER_DIR=\"$DEVELOPER_DIR\" xcrun --sdk macosx --show-sdk-path)}\"; DEVELOPER_DIR=\"$DEVELOPER_DIR\" SDKROOT=\"$SDKROOT\" xcrun swift build",
     "allow_concurrent_runs": false,
     "reveal": "no_focus",
     "hide": "never"

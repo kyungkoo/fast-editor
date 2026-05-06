@@ -508,7 +508,7 @@ fn markdown_preview_html(text: &str) -> String {
         let line = raw_line.trim_end_matches('\r');
         let trimmed = line.trim();
 
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        if is_code_fence(trimmed) {
             close_lists(&mut body, &mut in_unordered_list, &mut in_ordered_list);
             if in_code_block {
                 body.push_str("</code></pre>\n");
@@ -539,7 +539,7 @@ fn markdown_preview_html(text: &str) -> String {
             continue;
         }
 
-        if let Some(content) = unordered_list_item(trimmed) {
+        if let Some(content) = unordered_list_item(line) {
             if in_ordered_list {
                 body.push_str("</ol>\n");
                 in_ordered_list = false;
@@ -555,7 +555,7 @@ fn markdown_preview_html(text: &str) -> String {
             continue;
         }
 
-        if let Some(content) = ordered_list_item(trimmed) {
+        if let Some(content) = ordered_list_item(line) {
             if in_unordered_list {
                 body.push_str("</ul>\n");
                 in_unordered_list = false;
@@ -612,6 +612,13 @@ h1, h2, h3, h4, h5, h6 {{
 p, blockquote, pre, ul, ol {{
   margin: 0.7em 0;
 }}
+ul, ol {{
+  padding-left: 1.45em;
+}}
+li {{
+  margin: 0.3em 0;
+  padding-left: 0.15em;
+}}
 blockquote {{
   border-left: 3px solid #8abf88;
   color: color-mix(in srgb, CanvasText 70%, transparent);
@@ -630,9 +637,12 @@ pre {{
   border-radius: 6px;
   overflow: auto;
   padding: 12px;
+  white-space: pre;
 }}
 pre code {{
   background: transparent;
+  display: block;
+  line-height: 1.45;
   padding: 0;
 }}
 a {{
@@ -646,6 +656,10 @@ a {{
 </html>"#,
         body
     )
+}
+
+fn is_code_fence(line: &str) -> bool {
+    line.starts_with("```") || line.starts_with("~~~")
 }
 
 fn close_lists(body: &mut String, in_unordered_list: &mut bool, in_ordered_list: &mut bool) {
@@ -677,6 +691,7 @@ fn markdown_heading(line: &str) -> Option<(usize, &str)> {
 }
 
 fn unordered_list_item(line: &str) -> Option<&str> {
+    let line = line.trim_start();
     let mut chars = line.chars();
     match (chars.next(), chars.next()) {
         (Some('-' | '*' | '+'), Some(character)) if character.is_whitespace() => Some(&line[2..]),
@@ -685,6 +700,7 @@ fn unordered_list_item(line: &str) -> Option<&str> {
 }
 
 fn ordered_list_item(line: &str) -> Option<&str> {
+    let line = line.trim_start();
     let dot_index = line.find('.')?;
     if dot_index == 0
         || !line[..dot_index]

@@ -25,7 +25,7 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 editorPane
                 Divider()
-                MarkdownPreview(markdown: editor.text)
+                MarkdownPreview(html: editor.markdownPreviewHTML)
                     .frame(minWidth: 280)
             }
         } else {

@@ -249,6 +249,31 @@ fn markdown_preview_html_renders_current_buffer_text() {
 }
 
 #[test]
+fn markdown_preview_html_renders_indented_lists_and_fenced_code_blocks() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text(
+        buffer_id,
+        "1. **Branch off the right base**\n   - Release: `git checkout -b release/X.Y.Z develop`\n   - Hotfix: `git checkout -b hotfix/X.Y.Z master`\n2. **Merge into `master`** with `--no-ff`:\n   ```bash\n   git checkout master && git pull\n   git merge --no-ff release/X.Y.Z\n   ```",
+    )
+    .expect("replace text");
+
+    let html = core
+        .markdown_preview_html(buffer_id)
+        .expect("markdown preview html");
+
+    assert!(html.contains("<ol>"));
+    assert!(html.contains("<li><strong>Branch off the right base</strong></li>"));
+    assert!(html.contains("<ul>"));
+    assert!(html.contains("<li>Release: <code>git checkout -b release/X.Y.Z develop</code></li>"));
+    assert!(html.contains("<pre><code>"));
+    assert!(html.contains("git checkout master &amp;&amp; git pull"));
+    assert!(html.contains("git merge --no-ff release/X.Y.Z"));
+    assert!(!html.contains("```bash"));
+}
+
+#[test]
 fn markdown_preview_html_escapes_untrusted_content() {
     let mut core = EditorCore::new();
     let buffer_id = core.new_file();
