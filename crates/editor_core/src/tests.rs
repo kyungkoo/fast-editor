@@ -134,6 +134,19 @@ fn open_file_supports_empty_files() {
 }
 
 #[test]
+fn close_buffer_removes_buffer_from_core() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.close_buffer(buffer_id).expect("close buffer");
+
+    assert!(matches!(
+        core.get_text(buffer_id),
+        Err(EditorError::MissingBuffer(id)) if id == buffer_id
+    ));
+}
+
+#[test]
 fn render_snapshot_exposes_numbered_lines_and_dirty_state() {
     let path = write_temp_file(
         "render_snapshot_exposes_numbered_lines_and_dirty_state",
@@ -518,6 +531,20 @@ fn ffi_new_file_creates_empty_clean_untitled_buffer() {
     assert_eq!(take_ffi_string(fe_get_text(buffer_id)), "");
     assert_eq!(take_ffi_string(fe_get_path(buffer_id)), "");
     assert_eq!(fe_is_dirty(buffer_id), 0);
+}
+
+#[test]
+fn ffi_close_buffer_releases_buffer() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(fe_close_buffer(buffer_id), 1);
+    assert_eq!(fe_is_dirty(buffer_id), -1);
+    assert_eq!(
+        take_ffi_string(fe_last_error()),
+        format!("missing buffer {buffer_id}")
+    );
 }
 
 #[test]

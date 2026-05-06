@@ -97,6 +97,25 @@ pub extern "C" fn fe_open_file(path: *const c_char) -> BufferId {
 }
 
 #[no_mangle]
+pub extern "C" fn fe_close_buffer(buffer_id: BufferId) -> i32 {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|mut core| core.close_buffer(buffer_id));
+
+    match result {
+        Ok(()) => {
+            clear_last_error();
+            1
+        }
+        Err(error) => {
+            set_last_error(error);
+            0
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_get_text(buffer_id: BufferId) -> FeString {
     let result = global_core()
         .lock()

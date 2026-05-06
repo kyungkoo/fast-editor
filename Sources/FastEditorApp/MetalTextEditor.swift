@@ -372,8 +372,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
         let cursorUTF8Offset = utf8Offset(atUTF16Location: validRange.location)
         let position = cursorPosition(forUTF8Offset: cursorUTF8Offset)
-        let lineText = snapshot.lines[safe: position.line]?.text ?? ""
-        let caretX = gutterWidth + horizontalPadding + width(of: String(lineText.prefix(position.column))) - scrollOffset.x
+        let line = snapshot.lines[safe: position.line]
+        let caretX = gutterWidth + horizontalPadding + layoutMetrics.prefixWidth(column: position.column, in: line) - scrollOffset.x
         let caretY = verticalPadding + CGFloat(position.line) * lineHeight - scrollOffset.y
         let localRect = NSRect(x: caretX, y: caretY, width: caretWidth, height: lineHeight)
         let windowRect = convert(localRect, to: nil)
@@ -390,9 +390,9 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         let windowPoint = window.convertFromScreen(screenRect).origin
         let localPoint = convert(windowPoint, from: nil)
         let lineIndex = lineIndex(at: localPoint.y)
-        let lineText = snapshot.lines[safe: lineIndex]?.text ?? ""
+        let line = snapshot.lines[safe: lineIndex]
         let textX = localPoint.x - gutterWidth - horizontalPadding + scrollOffset.x
-        let column = column(in: lineText, closestTo: textX)
+        let column = layoutMetrics.column(in: line, closestTo: textX)
 
         return utf16Offset(forUTF8Offset: utf8Offset(line: lineIndex, column: column))
     }
@@ -484,10 +484,6 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func drawVisibleText(in context: CGContext) {
-        let textAttributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.textColor
-        ]
         let lineNumberAttributes: [NSAttributedString.Key: Any] = [
             .font: lineNumberFont,
             .foregroundColor: NSColor.secondaryLabelColor
@@ -511,37 +507,35 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             )
             context.saveGState()
             context.clip(to: textClipRect)
-            drawText(line, at: textPoint, defaultAttributes: textAttributes)
+            drawText(line, at: textPoint)
             context.restoreGState()
         }
     }
 
     private func drawText(
         _ line: EditorRenderLine,
-        at point: CGPoint,
-        defaultAttributes: [NSAttributedString.Key: Any]
+        at point: CGPoint
     ) {
         let characters = Array(line.text)
         var currentColumn = 0
+        var currentX = CGFloat.zero
 
         for span in line.spans.sorted(by: { $0.startColumn < $1.startColumn }) {
             let startColumn = min(max(span.startColumn, currentColumn), characters.count)
             let endColumn = min(max(span.endColumn, startColumn), characters.count)
 
             if currentColumn < startColumn {
-                drawTextSegment(
+                currentX += drawTextSegment(
                     characters[currentColumn..<startColumn],
-                    linePrefix: characters[..<currentColumn],
-                    at: point,
-                    attributes: defaultAttributes
+                    at: CGPoint(x: point.x + currentX, y: point.y),
+                    attributes: textAttributes
                 )
             }
 
-            drawTextSegment(
+            currentX += drawTextSegment(
                 characters[startColumn..<endColumn],
-                linePrefix: characters[..<startColumn],
-                at: point,
-                attributes: textAttributes(for: span.kind, defaultAttributes: defaultAttributes)
+                at: CGPoint(x: point.x + currentX, y: point.y),
+                attributes: textAttributes(for: span.kind, defaultAttributes: textAttributes)
             )
             currentColumn = endColumn
         }
@@ -549,26 +543,25 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         if currentColumn < characters.count {
             drawTextSegment(
                 characters[currentColumn..<characters.count],
-                linePrefix: characters[..<currentColumn],
-                at: point,
-                attributes: defaultAttributes
+                at: CGPoint(x: point.x + currentX, y: point.y),
+                attributes: textAttributes
             )
         }
     }
 
+    @discardableResult
     private func drawTextSegment(
         _ segment: ArraySlice<Character>,
-        linePrefix: ArraySlice<Character>,
         at point: CGPoint,
         attributes: [NSAttributedString.Key: Any]
-    ) {
+    ) -> CGFloat {
         guard !segment.isEmpty else {
-            return
+            return 0
         }
 
         let segmentText = String(segment)
-        let x = point.x + width(of: String(linePrefix))
-        (segmentText as NSString).draw(at: CGPoint(x: x, y: point.y), withAttributes: attributes)
+        (segmentText as NSString).draw(at: point, withAttributes: attributes)
+        return layoutMetrics.width(of: segmentText, attributes: attributes)
     }
 
     private func textAttributes(
@@ -634,12 +627,12 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
             let startColumn = cursorPosition(forUTF8Offset: lineSelectionStart).column
             let endColumn = cursorPosition(forUTF8Offset: lineSelectionEnd).column
-            let startX = gutterWidth + horizontalPadding + width(of: String(line.text.prefix(startColumn))) - scrollOffset.x
-            var highlightWidth = width(of: String(line.text.prefix(endColumn)))
-                - width(of: String(line.text.prefix(startColumn)))
+            let startX = gutterWidth + horizontalPadding + layoutMetrics.prefixWidth(column: startColumn, in: line) - scrollOffset.x
+            var highlightWidth = layoutMetrics.prefixWidth(column: endColumn, in: line)
+                - layoutMetrics.prefixWidth(column: startColumn, in: line)
 
             if selectsLineBreak {
-                highlightWidth = max(highlightWidth + width(of: " "), width(of: " "))
+                highlightWidth = max(highlightWidth + layoutMetrics.width(of: " "), layoutMetrics.width(of: " "))
             }
 
             let highlightY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y
@@ -679,9 +672,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func recalculateContentMetrics() {
-        let textAttributes: [NSAttributedString.Key: Any] = [.font: font]
-        let longestLineWidth = snapshot.lines.reduce(CGFloat.zero) { width, line in
-            max(width, (line.text as NSString).size(withAttributes: textAttributes).width)
+        let longestLineWidth = snapshot.lines.reduce(CGFloat.zero) { longestWidth, line in
+            max(longestWidth, layoutMetrics.prefixWidth(column: line.text.count, in: line))
         }
 
         contentSize = CGSize(
@@ -823,8 +815,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
     private func ensureCursorVisible() {
         let position = cursorPosition(forUTF8Offset: cursorOffset)
-        let lineText = snapshot.lines[safe: position.line]?.text ?? ""
-        let caretX = gutterWidth + horizontalPadding + width(of: String(lineText.prefix(position.column)))
+        let line = snapshot.lines[safe: position.line]
+        let caretX = gutterWidth + horizontalPadding + layoutMetrics.prefixWidth(column: position.column, in: line)
         let caretY = verticalPadding + CGFloat(position.line) * lineHeight
         let visibleMinX = scrollOffset.x
         let visibleMaxX = scrollOffset.x + max(0, bounds.width - gutterWidth - horizontalPadding)
@@ -993,42 +985,20 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         return min(max(0, rawLine), max(snapshot.lines.count - 1, 0))
     }
 
-    private func column(in lineText: String, closestTo x: CGFloat) -> Int {
-        guard x > 0 else {
-            return 0
-        }
-
-        var prefix = ""
-        var lastWidth = CGFloat.zero
-
-        for (index, character) in lineText.enumerated() {
-            prefix.append(character)
-            let nextWidth = width(of: prefix)
-            if x < (lastWidth + nextWidth) / 2 {
-                return index
-            }
-            lastWidth = nextWidth
-        }
-
-        return lineText.count
-    }
-
     private func cursorOffset(at point: CGPoint) -> Int {
         let lineIndex = lineIndex(at: point.y)
-        let lineText = snapshot.lines[safe: lineIndex]?.text ?? ""
+        let line = snapshot.lines[safe: lineIndex]
         let textX = point.x - gutterWidth - horizontalPadding + scrollOffset.x
-        let column = column(in: lineText, closestTo: textX)
+        let column = layoutMetrics.column(in: line, closestTo: textX)
 
         return utf8Offset(line: lineIndex, column: column)
     }
 
     private func cursorX(for snapshot: EditorRenderSnapshot) -> CGFloat {
-        let lineText = snapshot.lines[safe: snapshot.cursorLine]?.text ?? ""
-        return width(of: String(lineText.prefix(snapshot.cursorColumn)))
-    }
-
-    private func width(of text: String) -> CGFloat {
-        (text as NSString).size(withAttributes: [.font: font]).width
+        layoutMetrics.prefixWidth(
+            column: snapshot.cursorColumn,
+            in: snapshot.lines[safe: snapshot.cursorLine]
+        )
     }
 
     private func stringIndex(atUTF8Offset offset: Int) -> String.Index {
@@ -1085,6 +1055,20 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             y: 0,
             width: max(0, bounds.width - gutterWidth),
             height: bounds.height
+        )
+    }
+
+    private var textAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: font,
+            .foregroundColor: NSColor.textColor
+        ]
+    }
+
+    private var layoutMetrics: MetalTextLayoutMetrics {
+        MetalTextLayoutMetrics(
+            defaultAttributes: textAttributes,
+            attributesForSpanKind: textAttributes(for:defaultAttributes:)
         )
     }
 

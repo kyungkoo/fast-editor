@@ -27,6 +27,10 @@ let package = Package(
         .testTarget(
             name: "FastEditorTextEditingTests",
             dependencies: ["FastEditorTextEditing"]
+        ),
+        .testTarget(
+            name: "FastEditorAppTests",
+            dependencies: ["FastEditorApp"]
         )
     ]
 )

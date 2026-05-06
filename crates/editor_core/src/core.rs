@@ -148,6 +148,13 @@ impl EditorCore {
         Ok(id)
     }
 
+    pub fn close_buffer(&mut self, buffer_id: BufferId) -> Result<(), EditorError> {
+        self.buffers
+            .remove(&buffer_id)
+            .map(|_| ())
+            .ok_or(EditorError::MissingBuffer(buffer_id))
+    }
+
     pub fn get_text(&self, buffer_id: BufferId) -> Result<&str, EditorError> {
         self.buffer(buffer_id).map(|buffer| buffer.text.as_str())
     }

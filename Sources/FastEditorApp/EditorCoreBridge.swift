@@ -1,64 +1,6 @@
 import Foundation
 import SwiftUI
 
-private struct FeString {
-    let ptr: UnsafeMutablePointer<UInt8>?
-    let len: Int
-}
-
-@_silgen_name("fe_open_file")
-private func feOpenFile(_ path: UnsafePointer<CChar>) -> UInt64
-
-@_silgen_name("fe_new_file")
-private func feNewFile() -> UInt64
-
-@_silgen_name("fe_get_text")
-private func feGetText(_ bufferID: UInt64) -> FeString
-
-@_silgen_name("fe_get_render_snapshot")
-private func feGetRenderSnapshot(_ bufferID: UInt64) -> FeString
-
-@_silgen_name("fe_get_markdown_preview_html")
-private func feGetMarkdownPreviewHTML(_ bufferID: UInt64) -> FeString
-
-@_silgen_name("fe_get_path")
-private func feGetPath(_ bufferID: UInt64) -> FeString
-
-@_silgen_name("fe_replace_text")
-private func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
-
-@_silgen_name("fe_replace_text_with_cursor")
-private func feReplaceTextWithCursor(
-    _ bufferID: UInt64,
-    _ text: UnsafePointer<UInt8>?,
-    _ len: Int,
-    _ cursorOffset: Int
-) -> Int32
-
-@_silgen_name("fe_set_cursor_offset")
-private func feSetCursorOffset(_ bufferID: UInt64, _ cursorOffset: Int) -> Int32
-
-@_silgen_name("fe_undo")
-private func feUndo(_ bufferID: UInt64) -> Int32
-
-@_silgen_name("fe_redo")
-private func feRedo(_ bufferID: UInt64) -> Int32
-
-@_silgen_name("fe_save_file")
-private func feSaveFile(_ bufferID: UInt64) -> Int32
-
-@_silgen_name("fe_save_file_as")
-private func feSaveFileAs(_ bufferID: UInt64, _ path: UnsafePointer<CChar>) -> Int32
-
-@_silgen_name("fe_is_dirty")
-private func feIsDirty(_ bufferID: UInt64) -> Int32
-
-@_silgen_name("fe_last_error")
-private func feLastError() -> FeString
-
-@_silgen_name("fe_free_string")
-private func feFreeString(_ value: FeString)
-
 @MainActor
 final class EditorCoreBridge: ObservableObject {
     @Published private(set) var fileURL: URL?
@@ -70,11 +12,15 @@ final class EditorCoreBridge: ObservableObject {
     @Published var text = ""
     @Published var errorMessage = ""
 
-    private var bufferID: UInt64 = 0
+    private let session = EditorCoreSession()
     private var isSyncingFromCore = false
 
+    private var bufferID: UInt64 {
+        session.currentBufferID
+    }
+
     var hasOpenBuffer: Bool {
-        bufferID != 0
+        session.hasOpenBuffer
     }
 
     var canSave: Bool {
@@ -116,7 +62,7 @@ final class EditorCoreBridge: ObservableObject {
             return
         }
 
-        bufferID = openedID
+        session.replace(with: openedID)
         fileURL = url
         syncTextFromCore()
         syncRenderSnapshot()
@@ -134,7 +80,7 @@ final class EditorCoreBridge: ObservableObject {
             return
         }
 
-        bufferID = newID
+        session.replace(with: newID)
         fileURL = nil
         syncTextFromCore()
         syncRenderSnapshot()
@@ -391,64 +337,4 @@ final class EditorCoreBridge: ObservableObject {
     private var displayPath: String {
         fileURL?.path ?? "Untitled"
     }
-}
-
-struct EditorRenderSnapshot: Decodable, Equatable {
-    var bufferID: UInt64
-    var dirty: Bool
-    var cursorLine: Int
-    var cursorColumn: Int
-    var lines: [EditorRenderLine]
-
-    static let empty = EditorRenderSnapshot(
-        bufferID: 0,
-        dirty: false,
-        cursorLine: 0,
-        cursorColumn: 0,
-        lines: [EditorRenderLine(index: 0, lineNumber: 1, text: "", spans: [])]
-    )
-
-    private enum CodingKeys: String, CodingKey {
-        case bufferID = "buffer_id"
-        case dirty
-        case cursorLine = "cursor_line"
-        case cursorColumn = "cursor_column"
-        case lines
-    }
-}
-
-struct EditorRenderLine: Decodable, Equatable {
-    var index: Int
-    var lineNumber: Int
-    var text: String
-    var spans: [EditorRenderSpan]
-
-    private enum CodingKeys: String, CodingKey {
-        case index
-        case lineNumber = "line_number"
-        case text
-        case spans
-    }
-}
-
-struct EditorRenderSpan: Decodable, Equatable {
-    var startColumn: Int
-    var endColumn: Int
-    var kind: EditorRenderSpanKind
-
-    private enum CodingKeys: String, CodingKey {
-        case startColumn = "start_column"
-        case endColumn = "end_column"
-        case kind
-    }
-}
-
-enum EditorRenderSpanKind: String, Decodable {
-    case markdownHeading = "markdown_heading"
-    case markdownListMarker = "markdown_list_marker"
-    case markdownQuote = "markdown_quote"
-    case markdownCode = "markdown_code"
-    case markdownInlineCode = "markdown_inline_code"
-    case markdownLink = "markdown_link"
-    case markdownEmphasis = "markdown_emphasis"
 }
