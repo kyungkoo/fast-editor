@@ -13,6 +13,7 @@ pub enum EditorError {
     MissingBuffer(BufferId),
     InvalidPath,
     InvalidUtf8,
+    InvalidCursorOffset(usize),
     MissingPath(BufferId),
 }
 
@@ -23,6 +24,9 @@ impl fmt::Display for EditorError {
             EditorError::MissingBuffer(id) => write!(f, "missing buffer {id}"),
             EditorError::InvalidPath => write!(f, "invalid path"),
             EditorError::InvalidUtf8 => write!(f, "invalid utf-8"),
+            EditorError::InvalidCursorOffset(offset) => {
+                write!(f, "invalid cursor offset {offset}")
+            }
             EditorError::MissingPath(id) => write!(f, "missing path for buffer {id}"),
         }
     }
@@ -65,6 +69,7 @@ struct Buffer {
     path: Option<PathBuf>,
     text: String,
     saved_text: String,
+    cursor_offset: usize,
 }
 
 #[derive(Debug, Default)]
@@ -89,6 +94,7 @@ impl EditorCore {
                 path: None,
                 text: String::new(),
                 saved_text: String::new(),
+                cursor_offset: 0,
             },
         );
         id
@@ -104,6 +110,7 @@ impl EditorCore {
                 path: Some(path),
                 saved_text: text.clone(),
                 text,
+                cursor_offset: 0,
             },
         );
         Ok(id)
@@ -120,6 +127,38 @@ impl EditorCore {
     ) -> Result<(), EditorError> {
         let buffer = self.buffer_mut(buffer_id)?;
         buffer.text = text.into();
+        buffer.cursor_offset = clamp_to_char_boundary(&buffer.text, buffer.cursor_offset);
+        Ok(())
+    }
+
+    pub fn replace_text_with_cursor(
+        &mut self,
+        buffer_id: BufferId,
+        text: impl Into<String>,
+        cursor_offset: usize,
+    ) -> Result<(), EditorError> {
+        let text = text.into();
+        if !text.is_char_boundary(cursor_offset) {
+            return Err(EditorError::InvalidCursorOffset(cursor_offset));
+        }
+
+        let buffer = self.buffer_mut(buffer_id)?;
+        buffer.text = text;
+        buffer.cursor_offset = cursor_offset;
+        Ok(())
+    }
+
+    pub fn set_cursor_offset(
+        &mut self,
+        buffer_id: BufferId,
+        cursor_offset: usize,
+    ) -> Result<(), EditorError> {
+        let buffer = self.buffer_mut(buffer_id)?;
+        if !buffer.text.is_char_boundary(cursor_offset) {
+            return Err(EditorError::InvalidCursorOffset(cursor_offset));
+        }
+
+        buffer.cursor_offset = cursor_offset;
         Ok(())
     }
 
@@ -169,12 +208,13 @@ impl EditorCore {
     pub fn render_snapshot(&self, buffer_id: BufferId) -> Result<RenderSnapshot, EditorError> {
         let buffer = self.buffer(buffer_id)?;
         let lines = split_render_lines(&buffer.text);
+        let (cursor_line, cursor_column) = cursor_position(&buffer.text, buffer.cursor_offset);
 
         Ok(RenderSnapshot {
             buffer_id,
             dirty: buffer.text != buffer.saved_text,
-            cursor_line: 0,
-            cursor_column: 0,
+            cursor_line,
+            cursor_column,
             lines,
         })
     }
@@ -218,4 +258,29 @@ fn split_render_lines(text: &str) -> Vec<RenderLine> {
     }
 
     lines
+}
+
+fn cursor_position(text: &str, cursor_offset: usize) -> (usize, usize) {
+    let cursor_offset = clamp_to_char_boundary(text, cursor_offset);
+    let mut line = 0;
+    let mut column = 0;
+
+    for character in text[..cursor_offset].chars() {
+        if character == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
+}
+
+fn clamp_to_char_boundary(text: &str, cursor_offset: usize) -> usize {
+    let mut cursor_offset = cursor_offset.min(text.len());
+    while !text.is_char_boundary(cursor_offset) {
+        cursor_offset -= 1;
+    }
+    cursor_offset
 }

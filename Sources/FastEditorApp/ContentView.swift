@@ -29,8 +29,12 @@ struct ContentView: View {
             )
         case .metal:
             MetalTextEditor(
+                text: editor.textBinding,
                 snapshot: editor.renderSnapshot,
-                showsInsertionPoint: editor.hasOpenBuffer
+                isEditable: editor.hasOpenBuffer,
+                focusRevision: editor.focusRevision,
+                onTextChange: editor.replaceText,
+                onCursorMove: editor.setCursorUTF8Offset
             )
         }
     }

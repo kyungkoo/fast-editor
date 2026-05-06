@@ -160,6 +160,40 @@ fn render_snapshot_exposes_numbered_lines_and_dirty_state() {
 }
 
 #[test]
+fn render_snapshot_tracks_cursor_line_and_column() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text_with_cursor(buffer_id, "one\ntwo\nthree", 8)
+        .expect("replace text with cursor");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.cursor_line, 2);
+    assert_eq!(snapshot.cursor_column, 0);
+
+    core.set_cursor_offset(buffer_id, 11)
+        .expect("set cursor offset");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.cursor_line, 2);
+    assert_eq!(snapshot.cursor_column, 3);
+}
+
+#[test]
+fn cursor_offset_must_be_utf8_boundary() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    let error = core
+        .replace_text_with_cursor(buffer_id, "aé", 2)
+        .expect_err("cursor boundary error");
+
+    assert!(matches!(error, EditorError::InvalidCursorOffset(2)));
+}
+
+#[test]
 fn missing_buffer_returns_error() {
     let mut core = EditorCore::new();
 
@@ -199,6 +233,35 @@ fn ffi_render_snapshot_returns_json_payload() {
     assert!(snapshot.contains("\"text\":\"alpha\""));
     assert!(snapshot.contains("\"line_number\":2"));
     assert!(snapshot.contains("\"text\":\"beta\""));
+}
+
+#[test]
+fn ffi_render_snapshot_reports_cursor_from_replace_payload() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text_with_cursor(buffer_id, "alpha\nbeta", 8), 1);
+
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+
+    assert!(snapshot.contains("\"cursor_line\":1"));
+    assert!(snapshot.contains("\"cursor_column\":2"));
+}
+
+#[test]
+fn ffi_set_cursor_offset_updates_render_snapshot() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text(buffer_id, "alpha\nbeta"), 1);
+    assert_eq!(fe_set_cursor_offset(buffer_id, 10), 1);
+
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+
+    assert!(snapshot.contains("\"cursor_line\":1"));
+    assert!(snapshot.contains("\"cursor_column\":4"));
 }
 
 #[test]
@@ -338,6 +401,10 @@ fn ffi_open_file(path: &Path) -> BufferId {
 
 fn ffi_replace_text(buffer_id: BufferId, text: &str) -> i32 {
     fe_replace_text(buffer_id, text.as_ptr(), text.len())
+}
+
+fn ffi_replace_text_with_cursor(buffer_id: BufferId, text: &str, cursor_offset: usize) -> i32 {
+    fe_replace_text_with_cursor(buffer_id, text.as_ptr(), text.len(), cursor_offset)
 }
 
 fn ffi_save_file_as(buffer_id: BufferId, path: &Path) -> i32 {

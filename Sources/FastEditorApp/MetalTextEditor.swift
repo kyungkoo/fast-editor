@@ -4,41 +4,68 @@ import MetalKit
 import SwiftUI
 
 struct MetalTextEditor: NSViewRepresentable {
+    @Binding var text: String
     var snapshot: EditorRenderSnapshot
-    var showsInsertionPoint: Bool
+    var isEditable: Bool
+    var focusRevision: Int
+    var onTextChange: (String, Int) -> Void
+    var onCursorMove: (Int) -> Void
 
     func makeNSView(context: Context) -> MetalTextRenderView {
         MetalTextRenderView()
     }
 
     func updateNSView(_ view: MetalTextRenderView, context: Context) {
+        view.text = text
         view.snapshot = snapshot
-        view.showsInsertionPoint = showsInsertionPoint
+        view.isEditable = isEditable
+        view.onTextChange = onTextChange
+        view.onCursorMove = onCursorMove
+        view.focus(revision: focusRevision)
     }
 }
 
-final class MetalTextRenderView: MTKView {
-    var snapshot = EditorRenderSnapshot.empty {
+final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
+    var text = "" {
         didSet {
-            guard oldValue != snapshot else {
+            guard oldValue != text else {
                 return
             }
 
+            cursorOffset = clampCursorOffset(cursorOffset)
+            selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
             recalculateContentMetrics()
             clampScrollOffset()
             setNeedsDisplay(bounds)
         }
     }
 
-    var showsInsertionPoint = false {
+    var snapshot = EditorRenderSnapshot.empty {
         didSet {
-            guard oldValue != showsInsertionPoint else {
+            guard oldValue != snapshot else {
+                return
+            }
+
+            cursorOffset = utf8Offset(line: snapshot.cursorLine, column: snapshot.cursorColumn)
+            recalculateContentMetrics()
+            clampScrollOffset()
+            ensureCursorVisible()
+            setNeedsDisplay(bounds)
+        }
+    }
+
+    var isEditable = false {
+        didSet {
+            guard oldValue != isEditable else {
                 return
             }
 
             setNeedsDisplay(bounds)
         }
     }
+
+    var onTextChange: ((String, Int) -> Void)?
+    var onCursorMove: ((Int) -> Void)?
 
     private let commandQueue: MTLCommandQueue
     private let imageContext: CIContext
@@ -46,6 +73,12 @@ final class MetalTextRenderView: MTKView {
     private let lineNumberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
     private var scrollOffset = CGPoint.zero
     private var contentSize = CGSize.zero
+    private var cursorOffset = 0
+    private var lastFocusedRevision = 0
+    private var markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+    private var selectionAnchorOffset: Int?
+    private var mouseSelectionAnchorOffset: Int?
+    private var preferredColumn: Int?
 
     private let gutterWidth: CGFloat = 56
     private let horizontalPadding: CGFloat = 12
@@ -86,6 +119,10 @@ final class MetalTextRenderView: MTKView {
         true
     }
 
+    override var isFlipped: Bool {
+        true
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
@@ -106,10 +143,251 @@ final class MetalTextRenderView: MTKView {
         setNeedsDisplay(bounds)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        guard isEditable else {
+            return
+        }
+
+        window?.makeFirstResponder(self)
+        inputContext?.discardMarkedText()
+
+        let point = convert(event.locationInWindow, from: nil)
+        let clickedOffset = cursorOffset(at: point)
+
+        if event.modifierFlags.contains(.shift) {
+            selectionAnchorOffset = selectionAnchorOffset ?? cursorOffset
+        } else {
+            selectionAnchorOffset = nil
+        }
+
+        mouseSelectionAnchorOffset = selectionAnchorOffset ?? clickedOffset
+        cursorOffset = clickedOffset
+        preferredColumn = nil
+        publishCursorMove()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isEditable else {
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        selectionAnchorOffset = mouseSelectionAnchorOffset ?? cursorOffset
+        cursorOffset = cursorOffset(at: point)
+        preferredColumn = nil
+        publishCursorMove()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseSelectionAnchorOffset = nil
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isEditable else {
+            super.keyDown(with: event)
+            return
+        }
+
+        if handleCommandShortcut(event) {
+            return
+        }
+
+        if event.modifierFlags.contains(.command) {
+            super.keyDown(with: event)
+            return
+        }
+
+        interpretKeyEvents([event])
+    }
+
+    override func insertText(_ insertString: Any) {
+        insertText(insertString, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+
+    override func doCommand(by selector: Selector) {
+        guard isEditable else {
+            super.doCommand(by: selector)
+            return
+        }
+
+        switch selector {
+        case #selector(insertNewline(_:)):
+            inputContext?.discardMarkedText()
+            replaceCharactersBeforeCursor(0, afterCursor: 0, with: "\n")
+        case #selector(deleteBackward(_:)):
+            inputContext?.discardMarkedText()
+            replaceCharactersBeforeCursor(1, afterCursor: 0, with: "")
+        case #selector(deleteForward(_:)):
+            inputContext?.discardMarkedText()
+            replaceCharactersBeforeCursor(0, afterCursor: 1, with: "")
+        case #selector(moveLeft(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorHorizontally(-1, extendingSelection: false)
+        case #selector(moveRight(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorHorizontally(1, extendingSelection: false)
+        case #selector(moveUp(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorVertically(-1, extendingSelection: false)
+        case #selector(moveDown(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorVertically(1, extendingSelection: false)
+        case #selector(moveLeftAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorHorizontally(-1, extendingSelection: true)
+        case #selector(moveRightAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorHorizontally(1, extendingSelection: true)
+        case #selector(moveUpAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorVertically(-1, extendingSelection: true)
+        case #selector(moveDownAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorVertically(1, extendingSelection: true)
+        case #selector(moveToBeginningOfLine(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorToLineBoundary(.beginning, extendingSelection: false)
+        case #selector(moveToEndOfLine(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorToLineBoundary(.end, extendingSelection: false)
+        case #selector(moveToBeginningOfLineAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorToLineBoundary(.beginning, extendingSelection: true)
+        case #selector(moveToEndOfLineAndModifySelection(_:)):
+            inputContext?.discardMarkedText()
+            moveCursorToLineBoundary(.end, extendingSelection: true)
+        default:
+            super.doCommand(by: selector)
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         autoreleasepool {
             renderFrame()
         }
+    }
+
+    func focus(revision: Int) {
+        guard isEditable, lastFocusedRevision != revision else {
+            return
+        }
+
+        lastFocusedRevision = revision
+        DispatchQueue.main.async {
+            self.window?.makeFirstResponder(self)
+        }
+    }
+
+    func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard isEditable, let insertedText = plainText(from: insertString) else {
+            return
+        }
+
+        let targetRange = effectiveReplacementRange(replacementRange)
+        guard replaceUTF16Range(targetRange, with: insertedText) else {
+            return
+        }
+
+        markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        selectionAnchorOffset = nil
+        cursorOffset = utf8Offset(atUTF16Location: targetRange.location + insertedText.utf16.count)
+        preferredColumn = nil
+        publishTextChange()
+    }
+
+    func setMarkedText(_ insertString: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard isEditable, let markedText = plainText(from: insertString) else {
+            return
+        }
+
+        let targetRange = effectiveReplacementRange(replacementRange)
+        guard replaceUTF16Range(targetRange, with: markedText) else {
+            return
+        }
+
+        if markedText.isEmpty {
+            markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        } else {
+            markedRangeUTF16 = NSRange(location: targetRange.location, length: markedText.utf16.count)
+        }
+
+        selectionAnchorOffset = nil
+        let selectedLocation = min(max(0, selectedRange.location + selectedRange.length), markedText.utf16.count)
+        cursorOffset = utf8Offset(atUTF16Location: targetRange.location + selectedLocation)
+        preferredColumn = nil
+        publishTextChange()
+    }
+
+    func unmarkText() {
+        markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        setNeedsDisplay(bounds)
+    }
+
+    func selectedRange() -> NSRange {
+        if let selectedRange = selectedUTF8Range {
+            let location = utf16Offset(forUTF8Offset: selectedRange.lowerBound)
+            let end = utf16Offset(forUTF8Offset: selectedRange.upperBound)
+            return NSRange(location: location, length: end - location)
+        }
+
+        return NSRange(location: utf16Offset(forUTF8Offset: cursorOffset), length: 0)
+    }
+
+    func markedRange() -> NSRange {
+        markedRangeUTF16
+    }
+
+    func hasMarkedText() -> Bool {
+        markedRangeUTF16.location != NSNotFound
+    }
+
+    func attributedSubstring(
+        forProposedRange range: NSRange,
+        actualRange: NSRangePointer?
+    ) -> NSAttributedString? {
+        guard let validRange = validUTF16Range(range) else {
+            actualRange?.pointee = NSRange(location: NSNotFound, length: 0)
+            return nil
+        }
+
+        actualRange?.pointee = validRange
+        let substring = (text as NSString).substring(with: validRange)
+        return NSAttributedString(string: substring, attributes: [.font: font])
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        [.font, .foregroundColor, .underlineStyle]
+    }
+
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        let validRange = validUTF16Range(range) ?? selectedRange()
+        actualRange?.pointee = validRange
+
+        let cursorUTF8Offset = utf8Offset(atUTF16Location: validRange.location)
+        let position = cursorPosition(forUTF8Offset: cursorUTF8Offset)
+        let lineText = snapshot.lines[safe: position.line]?.text ?? ""
+        let caretX = gutterWidth + horizontalPadding + width(of: String(lineText.prefix(position.column))) - scrollOffset.x
+        let caretY = verticalPadding + CGFloat(position.line) * lineHeight - scrollOffset.y
+        let localRect = NSRect(x: caretX, y: caretY, width: caretWidth, height: lineHeight)
+        let windowRect = convert(localRect, to: nil)
+
+        return window?.convertToScreen(windowRect) ?? windowRect
+    }
+
+    func characterIndex(for point: NSPoint) -> Int {
+        guard let window else {
+            return utf16Offset(forUTF8Offset: cursorOffset)
+        }
+
+        let screenRect = NSRect(origin: point, size: .zero)
+        let windowPoint = window.convertFromScreen(screenRect).origin
+        let localPoint = convert(windowPoint, from: nil)
+        let lineIndex = lineIndex(at: localPoint.y)
+        let lineText = snapshot.lines[safe: lineIndex]?.text ?? ""
+        let textX = localPoint.x - gutterWidth - horizontalPadding + scrollOffset.x
+        let column = column(in: lineText, closestTo: textX)
+
+        return utf16Offset(forUTF8Offset: utf8Offset(line: lineIndex, column: column))
     }
 
     private func renderFrame() {
@@ -163,6 +441,7 @@ final class MetalTextRenderView: MTKView {
         NSGraphicsContext.current = graphicsContext
 
         drawBackground(in: context)
+        drawSelectionHighlights(in: context)
         drawVisibleText(in: context)
         drawInsertionPointIfNeeded(in: context)
 
@@ -227,21 +506,72 @@ final class MetalTextRenderView: MTKView {
         }
     }
 
-    private func drawInsertionPointIfNeeded(in context: CGContext) {
-        guard showsInsertionPoint, !snapshot.lines.isEmpty else {
+    private func drawSelectionHighlights(in context: CGContext) {
+        guard let selectedRange = selectedUTF8Range else {
             return
         }
 
-        let caretY = verticalPadding - scrollOffset.y
+        let firstLine = max(0, Int(scrollOffset.y / lineHeight))
+        let visibleLineCount = Int(ceil(bounds.height / lineHeight)) + 2
+        let endLine = min(snapshot.lines.count, firstLine + visibleLineCount)
+
+        context.saveGState()
+        context.clip(to: textClipRect)
+        context.setFillColor(NSColor.selectedTextBackgroundColor.withAlphaComponent(0.45).cgColor)
+
+        for lineIndex in firstLine..<endLine {
+            let line = snapshot.lines[lineIndex]
+            let lineStart = utf8Offset(line: lineIndex, column: 0)
+            let lineTextEnd = utf8Offset(line: lineIndex, column: line.text.count)
+            let lineSelectionStart = max(selectedRange.lowerBound, lineStart)
+            let lineSelectionEnd = min(selectedRange.upperBound, lineTextEnd)
+            let selectsLineBreak = selectedRange.upperBound > lineTextEnd
+                && selectedRange.lowerBound <= lineTextEnd
+                && lineIndex < snapshot.lines.count - 1
+
+            guard lineSelectionStart < lineSelectionEnd || selectsLineBreak else {
+                continue
+            }
+
+            let startColumn = cursorPosition(forUTF8Offset: lineSelectionStart).column
+            let endColumn = cursorPosition(forUTF8Offset: lineSelectionEnd).column
+            let startX = gutterWidth + horizontalPadding + width(of: String(line.text.prefix(startColumn))) - scrollOffset.x
+            var highlightWidth = width(of: String(line.text.prefix(endColumn)))
+                - width(of: String(line.text.prefix(startColumn)))
+
+            if selectsLineBreak {
+                highlightWidth = max(highlightWidth + width(of: " "), width(of: " "))
+            }
+
+            let highlightY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y
+            context.fill(CGRect(
+                x: startX,
+                y: highlightY,
+                width: max(caretWidth, highlightWidth),
+                height: lineHeight
+            ))
+        }
+
+        context.restoreGState()
+    }
+
+
+    private func drawInsertionPointIfNeeded(in context: CGContext) {
+        guard isEditable, !snapshot.lines.isEmpty else {
+            return
+        }
+
+        let caretY = verticalPadding + CGFloat(snapshot.cursorLine) * lineHeight - scrollOffset.y
         guard caretY + lineHeight >= 0, caretY <= bounds.height else {
             return
         }
 
+        let caretX = gutterWidth + horizontalPadding + cursorX(for: snapshot) - scrollOffset.x
         context.saveGState()
         context.clip(to: textClipRect)
         context.setFillColor(NSColor.controlAccentColor.cgColor)
         context.fill(CGRect(
-            x: gutterWidth + horizontalPadding - scrollOffset.x,
+            x: caretX,
             y: caretY + 1,
             width: caretWidth,
             height: lineHeight - 2
@@ -274,6 +604,464 @@ final class MetalTextRenderView: MTKView {
         drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     }
 
+    private func replaceCharactersBeforeCursor(
+        _ charactersBeforeCursor: Int,
+        afterCursor charactersAfterCursor: Int,
+        with replacement: String
+    ) {
+        if let selectedRange = selectedUTF8Range {
+            replaceUTF8Range(selectedRange, with: replacement)
+            return
+        }
+
+        let cursorIndex = stringIndex(atUTF8Offset: cursorOffset)
+        var lowerBound = cursorIndex
+        var upperBound = cursorIndex
+
+        for _ in 0..<charactersBeforeCursor where lowerBound > text.startIndex {
+            lowerBound = text.index(before: lowerBound)
+        }
+
+        for _ in 0..<charactersAfterCursor where upperBound < text.endIndex {
+            upperBound = text.index(after: upperBound)
+        }
+
+        guard lowerBound != upperBound || !replacement.isEmpty else {
+            return
+        }
+
+        text.replaceSubrange(lowerBound..<upperBound, with: replacement)
+        cursorOffset = utf8Offset(of: lowerBound) + replacement.utf8.count
+        selectionAnchorOffset = nil
+        preferredColumn = nil
+        publishTextChange()
+    }
+
+    private func moveCursorHorizontally(_ direction: Int, extendingSelection: Bool) {
+        guard direction != 0 else {
+            return
+        }
+
+        let existingSelection = selectedUTF8Range
+        if !extendingSelection, let selectedRange = existingSelection {
+            cursorOffset = direction < 0 ? selectedRange.lowerBound : selectedRange.upperBound
+            selectionAnchorOffset = nil
+            preferredColumn = nil
+            publishCursorMove()
+            return
+        }
+
+        updateSelectionAnchor(extendingSelection: extendingSelection)
+
+        let index = stringIndex(atUTF8Offset: cursorOffset)
+        if direction < 0, index > text.startIndex {
+            cursorOffset = utf8Offset(of: text.index(before: index))
+        } else if direction > 0, index < text.endIndex {
+            cursorOffset = utf8Offset(of: text.index(after: index))
+        }
+
+        preferredColumn = nil
+        publishCursorMove()
+    }
+
+    private func moveCursorVertically(_ direction: Int, extendingSelection: Bool) {
+        updateSelectionAnchor(extendingSelection: extendingSelection)
+
+        let position = cursorPosition(forUTF8Offset: cursorOffset)
+        let targetLine = min(max(0, position.line + direction), max(snapshot.lines.count - 1, 0))
+        let targetColumn = preferredColumn ?? position.column
+
+        preferredColumn = targetColumn
+        cursorOffset = utf8Offset(line: targetLine, column: targetColumn)
+        publishCursorMove()
+    }
+
+    private enum LineBoundary {
+        case beginning
+        case end
+    }
+
+    private func moveCursorToLineBoundary(_ boundary: LineBoundary, extendingSelection: Bool) {
+        updateSelectionAnchor(extendingSelection: extendingSelection)
+
+        let position = cursorPosition(forUTF8Offset: cursorOffset)
+        let lineText = snapshot.lines[safe: position.line]?.text ?? ""
+
+        switch boundary {
+        case .beginning:
+            cursorOffset = utf8Offset(line: position.line, column: 0)
+        case .end:
+            cursorOffset = utf8Offset(line: position.line, column: lineText.count)
+        }
+
+        preferredColumn = nil
+        publishCursorMove()
+    }
+
+    private func updateSelectionAnchor(extendingSelection: Bool) {
+        if extendingSelection {
+            selectionAnchorOffset = selectionAnchorOffset ?? cursorOffset
+        } else {
+            selectionAnchorOffset = nil
+        }
+    }
+
+    private func publishTextChange() {
+        cursorOffset = clampCursorOffset(cursorOffset)
+        selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
+        ensureCursorVisible()
+        onTextChange?(text, cursorOffset)
+        setNeedsDisplay(bounds)
+    }
+
+    private func publishCursorMove() {
+        cursorOffset = clampCursorOffset(cursorOffset)
+        selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
+        ensureCursorVisible()
+        onCursorMove?(cursorOffset)
+        setNeedsDisplay(bounds)
+    }
+
+    private func ensureCursorVisible() {
+        let position = cursorPosition(forUTF8Offset: cursorOffset)
+        let lineText = snapshot.lines[safe: position.line]?.text ?? ""
+        let caretX = gutterWidth + horizontalPadding + width(of: String(lineText.prefix(position.column)))
+        let caretY = verticalPadding + CGFloat(position.line) * lineHeight
+        let visibleMinX = scrollOffset.x
+        let visibleMaxX = scrollOffset.x + max(0, bounds.width - gutterWidth - horizontalPadding)
+
+        if caretX < gutterWidth + horizontalPadding + visibleMinX {
+            scrollOffset.x = max(0, caretX - gutterWidth - horizontalPadding)
+        } else if caretX + caretWidth > gutterWidth + visibleMaxX {
+            scrollOffset.x = caretX + caretWidth - gutterWidth - max(0, bounds.width - gutterWidth - horizontalPadding)
+        }
+
+        if caretY < scrollOffset.y {
+            scrollOffset.y = caretY
+        } else if caretY + lineHeight > scrollOffset.y + bounds.height {
+            scrollOffset.y = caretY + lineHeight - bounds.height
+        }
+
+        clampScrollOffset()
+    }
+
+    private func plainText(from insertString: Any) -> String? {
+        if let text = insertString as? String {
+            return text
+        }
+
+        if let attributedText = insertString as? NSAttributedString {
+            return attributedText.string
+        }
+
+        return nil
+    }
+
+    private func handleCommandShortcut(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command),
+              let command = event.charactersIgnoringModifiers?.lowercased()
+        else {
+            return false
+        }
+
+        switch command {
+        case "a":
+            inputContext?.discardMarkedText()
+            selectAll()
+            return true
+        case "c":
+            inputContext?.discardMarkedText()
+            copySelection()
+            return true
+        case "x":
+            inputContext?.discardMarkedText()
+            cutSelection()
+            return true
+        case "v":
+            inputContext?.discardMarkedText()
+            pasteFromClipboard()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func selectAll() {
+        selectionAnchorOffset = 0
+        cursorOffset = text.utf8.count
+        preferredColumn = nil
+        publishCursorMove()
+    }
+
+    private func copySelection() {
+        guard let selectedText else {
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(selectedText, forType: .string)
+    }
+
+    private func cutSelection() {
+        guard let selectedRange = selectedUTF8Range, let selectedText else {
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(selectedText, forType: .string)
+        replaceUTF8Range(selectedRange, with: "")
+    }
+
+    private func pasteFromClipboard() {
+        guard let pastedText = NSPasteboard.general.string(forType: .string), !pastedText.isEmpty else {
+            return
+        }
+
+        if let selectedRange = selectedUTF8Range {
+            replaceUTF8Range(selectedRange, with: pastedText)
+        } else {
+            replaceCharactersBeforeCursor(0, afterCursor: 0, with: pastedText)
+        }
+    }
+
+    private func effectiveReplacementRange(_ replacementRange: NSRange) -> NSRange {
+        if let validRange = validUTF16Range(replacementRange) {
+            return validRange
+        }
+
+        if hasMarkedText(), let validMarkedRange = validUTF16Range(markedRangeUTF16) {
+            return validMarkedRange
+        }
+
+        if let selectedRange = selectedUTF8Range {
+            let location = utf16Offset(forUTF8Offset: selectedRange.lowerBound)
+            let end = utf16Offset(forUTF8Offset: selectedRange.upperBound)
+            return NSRange(location: location, length: end - location)
+        }
+
+        return NSRange(location: utf16Offset(forUTF8Offset: cursorOffset), length: 0)
+    }
+
+    private func validUTF16Range(_ range: NSRange) -> NSRange? {
+        guard range.location != NSNotFound else {
+            return nil
+        }
+
+        let textLength = (text as NSString).length
+        guard range.location >= 0,
+              range.length >= 0,
+              range.location <= textLength,
+              range.location + range.length <= textLength
+        else {
+            return nil
+        }
+
+        return range
+    }
+
+    private func replaceUTF16Range(_ range: NSRange, with replacement: String) -> Bool {
+        guard let validRange = validUTF16Range(range) else {
+            return false
+        }
+
+        text = (text as NSString).replacingCharacters(in: validRange, with: replacement)
+        return true
+    }
+
+    private func replaceUTF8Range(_ range: Range<Int>, with replacement: String) {
+        let lowerBound = stringIndex(atUTF8Offset: range.lowerBound)
+        let upperBound = stringIndex(atUTF8Offset: range.upperBound)
+
+        text.replaceSubrange(lowerBound..<upperBound, with: replacement)
+        cursorOffset = range.lowerBound + replacement.utf8.count
+        selectionAnchorOffset = nil
+        markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        preferredColumn = nil
+        publishTextChange()
+    }
+
+    private func lineIndex(at y: CGFloat) -> Int {
+        let rawLine = Int(floor((y + scrollOffset.y - verticalPadding) / lineHeight))
+        return min(max(0, rawLine), max(snapshot.lines.count - 1, 0))
+    }
+
+    private func column(in lineText: String, closestTo x: CGFloat) -> Int {
+        guard x > 0 else {
+            return 0
+        }
+
+        var prefix = ""
+        var lastWidth = CGFloat.zero
+
+        for (index, character) in lineText.enumerated() {
+            prefix.append(character)
+            let nextWidth = width(of: prefix)
+            if x < (lastWidth + nextWidth) / 2 {
+                return index
+            }
+            lastWidth = nextWidth
+        }
+
+        return lineText.count
+    }
+
+    private func cursorOffset(at point: CGPoint) -> Int {
+        let lineIndex = lineIndex(at: point.y)
+        let lineText = snapshot.lines[safe: lineIndex]?.text ?? ""
+        let textX = point.x - gutterWidth - horizontalPadding + scrollOffset.x
+        let column = column(in: lineText, closestTo: textX)
+
+        return utf8Offset(line: lineIndex, column: column)
+    }
+
+    private func cursorX(for snapshot: EditorRenderSnapshot) -> CGFloat {
+        let lineText = snapshot.lines[safe: snapshot.cursorLine]?.text ?? ""
+        return width(of: String(lineText.prefix(snapshot.cursorColumn)))
+    }
+
+    private func width(of text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private func stringIndex(atUTF8Offset offset: Int) -> String.Index {
+        let offset = clampCursorOffset(offset)
+        var currentOffset = 0
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            if currentOffset == offset {
+                return index
+            }
+
+            let nextIndex = text.index(after: index)
+            let nextOffset = currentOffset + String(text[index]).utf8.count
+            if nextOffset > offset {
+                return index
+            }
+
+            currentOffset = nextOffset
+            index = nextIndex
+        }
+
+        return text.endIndex
+    }
+
+    private func utf8Offset(of index: String.Index) -> Int {
+        text[..<index].utf8.count
+    }
+
+    private func utf8Offset(atUTF16Location location: Int) -> Int {
+        let text = text as NSString
+        let location = min(max(0, location), text.length)
+        return text.substring(to: location).utf8.count
+    }
+
+    private func utf16Offset(forUTF8Offset offset: Int) -> Int {
+        let index = stringIndex(atUTF8Offset: offset)
+        return text[..<index].utf16.count
+    }
+
+    private func utf8Offset(line targetLine: Int, column targetColumn: Int) -> Int {
+        var line = 0
+        var column = 0
+        var offset = 0
+
+        for character in text {
+            if line == targetLine, column == targetColumn {
+                return offset
+            }
+
+            if character == "\n" {
+                if line == targetLine {
+                    return offset
+                }
+                line += 1
+                column = 0
+            } else {
+                column += 1
+            }
+
+            offset += String(character).utf8.count
+        }
+
+        return text.utf8.count
+    }
+
+    private func cursorPosition(forUTF8Offset offset: Int) -> (line: Int, column: Int) {
+        let offset = clampCursorOffset(offset)
+        var line = 0
+        var column = 0
+        var currentOffset = 0
+
+        for character in text {
+            if currentOffset == offset {
+                return (line, column)
+            }
+
+            if character == "\n" {
+                line += 1
+                column = 0
+            } else {
+                column += 1
+            }
+
+            currentOffset += String(character).utf8.count
+        }
+
+        return (line, column)
+    }
+
+    private func clampCursorOffset(_ offset: Int) -> Int {
+        var offset = min(max(0, offset), text.utf8.count)
+
+        while offset > 0, stringIndexIsInsideCharacter(offset) {
+            offset -= 1
+        }
+
+        return offset
+    }
+
+    private func stringIndexIsInsideCharacter(_ offset: Int) -> Bool {
+        var currentOffset = 0
+
+        for character in text {
+            let nextOffset = currentOffset + String(character).utf8.count
+            if currentOffset < offset, offset < nextOffset {
+                return true
+            }
+            currentOffset = nextOffset
+        }
+
+        return false
+    }
+
+    private var selectedUTF8Range: Range<Int>? {
+        guard let selectionAnchorOffset else {
+            return nil
+        }
+
+        let anchor = clampCursorOffset(selectionAnchorOffset)
+        let cursor = clampCursorOffset(cursorOffset)
+
+        guard anchor != cursor else {
+            return nil
+        }
+
+        return min(anchor, cursor)..<max(anchor, cursor)
+    }
+
+    private var selectedText: String? {
+        guard let selectedRange = selectedUTF8Range else {
+            return nil
+        }
+
+        let lowerBound = stringIndex(atUTF8Offset: selectedRange.lowerBound)
+        let upperBound = stringIndex(atUTF8Offset: selectedRange.upperBound)
+        return String(text[lowerBound..<upperBound])
+    }
+
     private var backingScaleFactor: CGFloat {
         window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
     }
@@ -285,5 +1073,15 @@ final class MetalTextRenderView: MTKView {
             width: max(0, bounds.width - gutterWidth),
             height: bounds.height
         )
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else {
+            return nil
+        }
+
+        return self[index]
     }
 }

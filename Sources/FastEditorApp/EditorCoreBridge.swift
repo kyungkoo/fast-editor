@@ -24,6 +24,17 @@ private func feGetPath(_ bufferID: UInt64) -> FeString
 @_silgen_name("fe_replace_text")
 private func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
 
+@_silgen_name("fe_replace_text_with_cursor")
+private func feReplaceTextWithCursor(
+    _ bufferID: UInt64,
+    _ text: UnsafePointer<UInt8>?,
+    _ len: Int,
+    _ cursorOffset: Int
+) -> Int32
+
+@_silgen_name("fe_set_cursor_offset")
+private func feSetCursorOffset(_ bufferID: UInt64, _ cursorOffset: Int) -> Int32
+
 @_silgen_name("fe_save_file")
 private func feSaveFile(_ bufferID: UInt64) -> Int32
 
@@ -163,6 +174,39 @@ final class EditorCoreBridge: ObservableObject {
         syncDirtyState()
         statusText = "Saved \(displayPath)"
         return true
+    }
+
+    func replaceText(_ newText: String, cursorUTF8Offset: Int) {
+        guard hasOpenBuffer, !isSyncingFromCore else {
+            return
+        }
+
+        text = newText
+        let bytes = Array(newText.utf8)
+        let result = bytes.withUnsafeBufferPointer { buffer in
+            feReplaceTextWithCursor(bufferID, buffer.baseAddress, buffer.count, cursorUTF8Offset)
+        }
+
+        if result == 0 {
+            reportLastError(prefix: "Edit failed")
+        } else {
+            syncRenderSnapshot()
+            syncDirtyState()
+            statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
+        }
+    }
+
+    func setCursorUTF8Offset(_ cursorUTF8Offset: Int) {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        guard feSetCursorOffset(bufferID, cursorUTF8Offset) != 0 else {
+            reportLastError(prefix: "Cursor update failed")
+            return
+        }
+
+        syncRenderSnapshot()
     }
 
     private func syncTextFromCore() {

@@ -121,7 +121,9 @@ pub extern "C" fn fe_get_render_snapshot(buffer_id: BufferId) -> FeString {
         .lock()
         .map_err(|_| EditorError::MissingBuffer(buffer_id))
         .and_then(|core| core.render_snapshot(buffer_id))
-        .and_then(|snapshot| serde_json::to_string(&snapshot).map_err(|_| EditorError::InvalidUtf8));
+        .and_then(|snapshot| {
+            serde_json::to_string(&snapshot).map_err(|_| EditorError::InvalidUtf8)
+        });
 
     match result {
         Ok(snapshot) => {
@@ -163,6 +165,44 @@ pub extern "C" fn fe_get_path(buffer_id: BufferId) -> FeString {
 
 #[no_mangle]
 pub extern "C" fn fe_replace_text(buffer_id: BufferId, text_ptr: *const u8, len: usize) -> i32 {
+    replace_text(buffer_id, text_ptr, len, None)
+}
+
+#[no_mangle]
+pub extern "C" fn fe_replace_text_with_cursor(
+    buffer_id: BufferId,
+    text_ptr: *const u8,
+    len: usize,
+    cursor_offset: usize,
+) -> i32 {
+    replace_text(buffer_id, text_ptr, len, Some(cursor_offset))
+}
+
+#[no_mangle]
+pub extern "C" fn fe_set_cursor_offset(buffer_id: BufferId, cursor_offset: usize) -> i32 {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|mut core| core.set_cursor_offset(buffer_id, cursor_offset));
+
+    match result {
+        Ok(()) => {
+            clear_last_error();
+            1
+        }
+        Err(error) => {
+            set_last_error(error);
+            0
+        }
+    }
+}
+
+fn replace_text(
+    buffer_id: BufferId,
+    text_ptr: *const u8,
+    len: usize,
+    cursor_offset: Option<usize>,
+) -> i32 {
     if text_ptr.is_null() && len != 0 {
         set_last_error(EditorError::InvalidUtf8);
         return 0;
@@ -177,10 +217,15 @@ pub extern "C" fn fe_replace_text(buffer_id: BufferId, text_ptr: *const u8, len:
     let result = std::str::from_utf8(bytes)
         .map_err(|_| EditorError::InvalidUtf8)
         .and_then(|text| {
-            global_core()
+            let mut core = global_core()
                 .lock()
-                .map_err(|_| EditorError::MissingBuffer(buffer_id))?
-                .replace_text(buffer_id, text)
+                .map_err(|_| EditorError::MissingBuffer(buffer_id))?;
+
+            if let Some(cursor_offset) = cursor_offset {
+                core.replace_text_with_cursor(buffer_id, text, cursor_offset)
+            } else {
+                core.replace_text(buffer_id, text)
+            }
         });
 
     match result {
