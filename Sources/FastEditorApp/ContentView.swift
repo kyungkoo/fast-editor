@@ -3,21 +3,35 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var editor = EditorCoreBridge()
+    @State private var renderMode = EditorRenderMode.appKit
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            AppKitTextEditor(
-                text: editor.textBinding,
-                isEditable: editor.hasOpenBuffer,
-                focusRevision: editor.focusRevision
-            )
+            editorSurface
         }
         .alert("Editor Core Error", isPresented: editor.errorPresented) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(editor.errorMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var editorSurface: some View {
+        switch renderMode {
+        case .appKit:
+            AppKitTextEditor(
+                text: editor.textBinding,
+                isEditable: editor.hasOpenBuffer,
+                focusRevision: editor.focusRevision
+            )
+        case .metal:
+            MetalTextEditor(
+                text: editor.text,
+                showsInsertionPoint: editor.hasOpenBuffer
+            )
         }
     }
 
@@ -51,6 +65,14 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             Spacer()
+
+            Picker("Renderer", selection: $renderMode) {
+                ForEach(EditorRenderMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 170)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -78,6 +100,24 @@ struct ContentView: View {
             }
         } else {
             _ = editor.save()
+        }
+    }
+}
+
+private enum EditorRenderMode: String, CaseIterable, Identifiable {
+    case appKit
+    case metal
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .appKit:
+            "AppKit"
+        case .metal:
+            "Metal"
         }
     }
 }
