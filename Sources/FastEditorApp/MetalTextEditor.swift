@@ -163,7 +163,7 @@ final class MetalTextRenderView: MTKView {
         NSGraphicsContext.current = graphicsContext
 
         drawBackground(in: context)
-        drawVisibleText()
+        drawVisibleText(in: context)
         drawInsertionPointIfNeeded(in: context)
 
         NSGraphicsContext.restoreGraphicsState()
@@ -190,7 +190,7 @@ final class MetalTextRenderView: MTKView {
         context.strokePath()
     }
 
-    private func drawVisibleText() {
+    private func drawVisibleText(in context: CGContext) {
         let firstLine = max(0, Int(scrollOffset.y / lineHeight))
         let visibleLineCount = Int(ceil(bounds.height / lineHeight)) + 2
         let endLine = min(snapshot.lines.count, firstLine + visibleLineCount)
@@ -220,7 +220,10 @@ final class MetalTextRenderView: MTKView {
                 x: gutterWidth + horizontalPadding - scrollOffset.x,
                 y: baselineY
             )
+            context.saveGState()
+            context.clip(to: textClipRect)
             (line.text as NSString).draw(at: textPoint, withAttributes: textAttributes)
+            context.restoreGState()
         }
     }
 
@@ -234,6 +237,8 @@ final class MetalTextRenderView: MTKView {
             return
         }
 
+        context.saveGState()
+        context.clip(to: textClipRect)
         context.setFillColor(NSColor.controlAccentColor.cgColor)
         context.fill(CGRect(
             x: gutterWidth + horizontalPadding - scrollOffset.x,
@@ -241,6 +246,7 @@ final class MetalTextRenderView: MTKView {
             width: caretWidth,
             height: lineHeight - 2
         ))
+        context.restoreGState()
     }
 
     private func recalculateContentMetrics() {
@@ -272,4 +278,12 @@ final class MetalTextRenderView: MTKView {
         window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
     }
 
+    private var textClipRect: CGRect {
+        CGRect(
+            x: gutterWidth,
+            y: 0,
+            width: max(0, bounds.width - gutterWidth),
+            height: bounds.height
+        )
+    }
 }
