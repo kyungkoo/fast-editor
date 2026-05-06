@@ -1,0 +1,39 @@
+[
+  {
+    "label": "FastEditor: Build",
+    "command": "./scripts/build.sh",
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "hide": "never"
+  },
+  {
+    "label": "FastEditor: Run",
+    "command": "source \"$HOME/.cargo/env\" && cargo build && swift run FastEditor",
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "hide": "never"
+  },
+  {
+    "label": "FastEditor: Rust Tests",
+    "command": "source \"$HOME/.cargo/env\" && cargo test",
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "hide": "never",
+    "tags": ["rust-test"]
+  },
+  {
+    "label": "FastEditor: Swift Build",
+    "command": "swift build",
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "hide": "never"
+  },
+  {
+    "label": "FastEditor: Open current file in Xcode",
+    "command": "./scripts/open-current-file-in-xcode.sh",
+    "args": ["$ZED_FILE"],
+    "allow_concurrent_runs": false,
+    "reveal": "never",
+    "hide": "always"
+  }
+]

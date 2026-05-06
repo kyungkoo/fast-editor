@@ -28,6 +28,11 @@ Restart the shell or source Cargo's environment file before building:
 The build script compiles `editor_core` first so SwiftPM can link the local
 `target/debug/libeditor_core.dylib`.
 
+## Zed Development
+
+This repository includes worktree-local Zed tasks in `.zed/tasks.json` for
+building, running, and testing from Zed. See `docs/zed-development.md`.
+
 ## Current Vertical Slice
 
 - Open a UTF-8 text file from the macOS shell.
@@ -36,4 +41,3 @@ The build script compiles `editor_core` first so SwiftPM can link the local
 
 Metal rendering, Markdown preview, and AI agent integration are intentionally
 left for follow-up slices.
-
