@@ -1,5 +1,6 @@
 import AppKit
 import CoreImage
+import FastEditorTextEditing
 import MetalKit
 import SwiftUI
 
@@ -10,6 +11,8 @@ struct MetalTextEditor: NSViewRepresentable {
     var focusRevision: Int
     var onTextChange: (String, Int) -> Void
     var onCursorMove: (Int) -> Void
+    var onUndo: () -> Void
+    var onRedo: () -> Void
 
     func makeNSView(context: Context) -> MetalTextRenderView {
         MetalTextRenderView()
@@ -21,6 +24,8 @@ struct MetalTextEditor: NSViewRepresentable {
         view.isEditable = isEditable
         view.onTextChange = onTextChange
         view.onCursorMove = onCursorMove
+        view.onUndo = onUndo
+        view.onRedo = onRedo
         view.focus(revision: focusRevision)
     }
 }
@@ -66,6 +71,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
     var onTextChange: ((String, Int) -> Void)?
     var onCursorMove: ((Int) -> Void)?
+    var onUndo: (() -> Void)?
+    var onRedo: (() -> Void)?
 
     private let commandQueue: MTLCommandQueue
     private let imageContext: CIContext
@@ -388,6 +395,13 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         let column = column(in: lineText, closestTo: textX)
 
         return utf16Offset(forUTF8Offset: utf8Offset(line: lineIndex, column: column))
+    }
+
+    private func clearTransientEditingState() {
+        selectionAnchorOffset = nil
+        mouseSelectionAnchorOffset = nil
+        markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        preferredColumn = nil
     }
 
     private func renderFrame() {
@@ -781,6 +795,15 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             inputContext?.discardMarkedText()
             pasteFromClipboard()
             return true
+        case "z":
+            inputContext?.discardMarkedText()
+            clearTransientEditingState()
+            if event.modifierFlags.contains(.shift) {
+                onRedo?()
+            } else {
+                onUndo?()
+            }
+            return true
         default:
             return false
         }
@@ -871,11 +894,9 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func replaceUTF8Range(_ range: Range<Int>, with replacement: String) {
-        let lowerBound = stringIndex(atUTF8Offset: range.lowerBound)
-        let upperBound = stringIndex(atUTF8Offset: range.upperBound)
-
-        text.replaceSubrange(lowerBound..<upperBound, with: replacement)
-        cursorOffset = range.lowerBound + replacement.utf8.count
+        let result = TextEditingPrimitives.replacingUTF8Range(range, in: text, with: replacement)
+        text = result.text
+        cursorOffset = result.cursorUTF8Offset
         selectionAnchorOffset = nil
         markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
         preferredColumn = nil
@@ -926,26 +947,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func stringIndex(atUTF8Offset offset: Int) -> String.Index {
-        let offset = clampCursorOffset(offset)
-        var currentOffset = 0
-        var index = text.startIndex
-
-        while index < text.endIndex {
-            if currentOffset == offset {
-                return index
-            }
-
-            let nextIndex = text.index(after: index)
-            let nextOffset = currentOffset + String(text[index]).utf8.count
-            if nextOffset > offset {
-                return index
-            }
-
-            currentOffset = nextOffset
-            index = nextIndex
-        }
-
-        return text.endIndex
+        TextEditingPrimitives.stringIndex(in: text, atUTF8Offset: offset)
     }
 
     private func utf8Offset(of index: String.Index) -> Int {
@@ -953,103 +955,31 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func utf8Offset(atUTF16Location location: Int) -> Int {
-        let text = text as NSString
-        let location = min(max(0, location), text.length)
-        return text.substring(to: location).utf8.count
+        TextEditingPrimitives.utf8Offset(in: text, atUTF16Location: location)
     }
 
     private func utf16Offset(forUTF8Offset offset: Int) -> Int {
-        let index = stringIndex(atUTF8Offset: offset)
-        return text[..<index].utf16.count
+        TextEditingPrimitives.utf16Offset(in: text, forUTF8Offset: offset)
     }
 
     private func utf8Offset(line targetLine: Int, column targetColumn: Int) -> Int {
-        var line = 0
-        var column = 0
-        var offset = 0
-
-        for character in text {
-            if line == targetLine, column == targetColumn {
-                return offset
-            }
-
-            if character == "\n" {
-                if line == targetLine {
-                    return offset
-                }
-                line += 1
-                column = 0
-            } else {
-                column += 1
-            }
-
-            offset += String(character).utf8.count
-        }
-
-        return text.utf8.count
+        TextEditingPrimitives.utf8Offset(in: text, line: targetLine, column: targetColumn)
     }
 
     private func cursorPosition(forUTF8Offset offset: Int) -> (line: Int, column: Int) {
-        let offset = clampCursorOffset(offset)
-        var line = 0
-        var column = 0
-        var currentOffset = 0
-
-        for character in text {
-            if currentOffset == offset {
-                return (line, column)
-            }
-
-            if character == "\n" {
-                line += 1
-                column = 0
-            } else {
-                column += 1
-            }
-
-            currentOffset += String(character).utf8.count
-        }
-
-        return (line, column)
+        TextEditingPrimitives.cursorPosition(in: text, forUTF8Offset: offset)
     }
 
     private func clampCursorOffset(_ offset: Int) -> Int {
-        var offset = min(max(0, offset), text.utf8.count)
-
-        while offset > 0, stringIndexIsInsideCharacter(offset) {
-            offset -= 1
-        }
-
-        return offset
-    }
-
-    private func stringIndexIsInsideCharacter(_ offset: Int) -> Bool {
-        var currentOffset = 0
-
-        for character in text {
-            let nextOffset = currentOffset + String(character).utf8.count
-            if currentOffset < offset, offset < nextOffset {
-                return true
-            }
-            currentOffset = nextOffset
-        }
-
-        return false
+        TextEditingPrimitives.clampUTF8Offset(offset, in: text)
     }
 
     private var selectedUTF8Range: Range<Int>? {
-        guard let selectionAnchorOffset else {
-            return nil
-        }
-
-        let anchor = clampCursorOffset(selectionAnchorOffset)
-        let cursor = clampCursorOffset(cursorOffset)
-
-        guard anchor != cursor else {
-            return nil
-        }
-
-        return min(anchor, cursor)..<max(anchor, cursor)
+        TextEditingPrimitives.selectedUTF8Range(
+            anchor: selectionAnchorOffset,
+            cursor: cursorOffset,
+            in: text
+        )
     }
 
     private var selectedText: String? {
@@ -1057,9 +987,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             return nil
         }
 
-        let lowerBound = stringIndex(atUTF8Offset: selectedRange.lowerBound)
-        let upperBound = stringIndex(atUTF8Offset: selectedRange.upperBound)
-        return String(text[lowerBound..<upperBound])
+        return TextEditingPrimitives.substring(in: text, utf8Range: selectedRange)
     }
 
     private var backingScaleFactor: CGFloat {

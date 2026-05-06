@@ -197,6 +197,41 @@ pub extern "C" fn fe_set_cursor_offset(buffer_id: BufferId, cursor_offset: usize
     }
 }
 
+#[no_mangle]
+pub extern "C" fn fe_undo(buffer_id: BufferId) -> i32 {
+    edit_history(buffer_id, EditorCore::undo)
+}
+
+#[no_mangle]
+pub extern "C" fn fe_redo(buffer_id: BufferId) -> i32 {
+    edit_history(buffer_id, EditorCore::redo)
+}
+
+fn edit_history(
+    buffer_id: BufferId,
+    action: fn(&mut EditorCore, BufferId) -> Result<bool, EditorError>,
+) -> i32 {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|mut core| action(&mut core, buffer_id));
+
+    match result {
+        Ok(true) => {
+            clear_last_error();
+            1
+        }
+        Ok(false) => {
+            clear_last_error();
+            0
+        }
+        Err(error) => {
+            set_last_error(error);
+            -1
+        }
+    }
+}
+
 fn replace_text(
     buffer_id: BufferId,
     text_ptr: *const u8,

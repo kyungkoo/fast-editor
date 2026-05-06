@@ -11,8 +11,10 @@ let package = Package(
         .executable(name: "FastEditor", targets: ["FastEditorApp"])
     ],
     targets: [
+        .target(name: "FastEditorTextEditing"),
         .executableTarget(
             name: "FastEditorApp",
+            dependencies: ["FastEditorTextEditing"],
             linkerSettings: [
                 .unsafeFlags([
                     "-L", "target/debug",
@@ -21,7 +23,10 @@ let package = Package(
                     "-Xlinker", "target/debug"
                 ])
             ]
+        ),
+        .testTarget(
+            name: "FastEditorTextEditingTests",
+            dependencies: ["FastEditorTextEditing"]
         )
     ]
 )
-

@@ -34,7 +34,9 @@ struct ContentView: View {
                 isEditable: editor.hasOpenBuffer,
                 focusRevision: editor.focusRevision,
                 onTextChange: editor.replaceText,
-                onCursorMove: editor.setCursorUTF8Offset
+                onCursorMove: editor.setCursorUTF8Offset,
+                onUndo: editor.undo,
+                onRedo: editor.redo
             )
         }
     }

@@ -70,6 +70,14 @@ struct Buffer {
     text: String,
     saved_text: String,
     cursor_offset: usize,
+    undo_stack: Vec<EditState>,
+    redo_stack: Vec<EditState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditState {
+    text: String,
+    cursor_offset: usize,
 }
 
 #[derive(Debug, Default)]
@@ -95,6 +103,8 @@ impl EditorCore {
                 text: String::new(),
                 saved_text: String::new(),
                 cursor_offset: 0,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
             },
         );
         id
@@ -111,6 +121,8 @@ impl EditorCore {
                 saved_text: text.clone(),
                 text,
                 cursor_offset: 0,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
             },
         );
         Ok(id)
@@ -126,8 +138,9 @@ impl EditorCore {
         text: impl Into<String>,
     ) -> Result<(), EditorError> {
         let buffer = self.buffer_mut(buffer_id)?;
-        buffer.text = text.into();
-        buffer.cursor_offset = clamp_to_char_boundary(&buffer.text, buffer.cursor_offset);
+        let text = text.into();
+        let cursor_offset = clamp_to_char_boundary(&text, buffer.cursor_offset);
+        buffer.replace_text(text, cursor_offset);
         Ok(())
     }
 
@@ -143,8 +156,7 @@ impl EditorCore {
         }
 
         let buffer = self.buffer_mut(buffer_id)?;
-        buffer.text = text;
-        buffer.cursor_offset = cursor_offset;
+        buffer.replace_text(text, cursor_offset);
         Ok(())
     }
 
@@ -160,6 +172,16 @@ impl EditorCore {
 
         buffer.cursor_offset = cursor_offset;
         Ok(())
+    }
+
+    pub fn undo(&mut self, buffer_id: BufferId) -> Result<bool, EditorError> {
+        let buffer = self.buffer_mut(buffer_id)?;
+        Ok(buffer.undo())
+    }
+
+    pub fn redo(&mut self, buffer_id: BufferId) -> Result<bool, EditorError> {
+        let buffer = self.buffer_mut(buffer_id)?;
+        Ok(buffer.redo())
     }
 
     pub fn save_file(&mut self, buffer_id: BufferId) -> Result<(), EditorError> {
@@ -235,6 +257,56 @@ impl EditorCore {
         self.buffers
             .get_mut(&buffer_id)
             .ok_or(EditorError::MissingBuffer(buffer_id))
+    }
+}
+
+impl Buffer {
+    fn edit_state(&self) -> EditState {
+        EditState {
+            text: self.text.clone(),
+            cursor_offset: self.cursor_offset,
+        }
+    }
+
+    fn replace_text(&mut self, text: String, cursor_offset: usize) {
+        let cursor_offset = clamp_to_char_boundary(&text, cursor_offset);
+        let next_state = EditState {
+            text,
+            cursor_offset,
+        };
+
+        if self.edit_state() == next_state {
+            return;
+        }
+
+        self.undo_stack.push(self.edit_state());
+        self.redo_stack.clear();
+        self.apply_state(next_state);
+    }
+
+    fn undo(&mut self) -> bool {
+        let Some(previous_state) = self.undo_stack.pop() else {
+            return false;
+        };
+
+        self.redo_stack.push(self.edit_state());
+        self.apply_state(previous_state);
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        let Some(next_state) = self.redo_stack.pop() else {
+            return false;
+        };
+
+        self.undo_stack.push(self.edit_state());
+        self.apply_state(next_state);
+        true
+    }
+
+    fn apply_state(&mut self, state: EditState) {
+        self.text = state.text;
+        self.cursor_offset = clamp_to_char_boundary(&self.text, state.cursor_offset);
     }
 }
 

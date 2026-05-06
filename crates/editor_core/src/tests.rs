@@ -194,6 +194,57 @@ fn cursor_offset_must_be_utf8_boundary() {
 }
 
 #[test]
+fn undo_and_redo_restore_text_cursor_and_dirty_state() {
+    let path = write_temp_file(
+        "undo_and_redo_restore_text_cursor_and_dirty_state",
+        "before",
+    );
+    let mut core = EditorCore::new();
+    let buffer_id = core.open_file(&path).expect("open file");
+
+    core.replace_text_with_cursor(buffer_id, "after", 5)
+        .expect("replace text");
+    assert!(core.is_dirty(buffer_id).expect("dirty state"));
+
+    assert!(core.undo(buffer_id).expect("undo"));
+    assert_eq!(core.get_text(buffer_id).expect("buffer text"), "before");
+    assert!(!core.is_dirty(buffer_id).expect("dirty state"));
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+    assert_eq!(snapshot.cursor_line, 0);
+    assert_eq!(snapshot.cursor_column, 0);
+
+    assert!(core.redo(buffer_id).expect("redo"));
+    assert_eq!(core.get_text(buffer_id).expect("buffer text"), "after");
+    assert!(core.is_dirty(buffer_id).expect("dirty state"));
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+    assert_eq!(snapshot.cursor_line, 0);
+    assert_eq!(snapshot.cursor_column, 5);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn new_edit_after_undo_clears_redo_stack() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text_with_cursor(buffer_id, "one", 3)
+        .expect("replace text");
+    core.replace_text_with_cursor(buffer_id, "two", 3)
+        .expect("replace text");
+
+    assert!(core.undo(buffer_id).expect("undo"));
+    assert_eq!(core.get_text(buffer_id).expect("buffer text"), "one");
+
+    core.replace_text_with_cursor(buffer_id, "three", 5)
+        .expect("replace text");
+
+    assert!(!core.redo(buffer_id).expect("redo"));
+    assert_eq!(core.get_text(buffer_id).expect("buffer text"), "three");
+}
+
+#[test]
 fn missing_buffer_returns_error() {
     let mut core = EditorCore::new();
 
@@ -262,6 +313,40 @@ fn ffi_set_cursor_offset_updates_render_snapshot() {
 
     assert!(snapshot.contains("\"cursor_line\":1"));
     assert!(snapshot.contains("\"cursor_column\":4"));
+}
+
+#[test]
+fn ffi_undo_and_redo_restore_text_and_cursor() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text_with_cursor(buffer_id, "alpha", 5), 1);
+    assert_eq!(ffi_replace_text_with_cursor(buffer_id, "alpha\nbeta", 8), 1);
+
+    assert_eq!(fe_undo(buffer_id), 1);
+    assert_eq!(take_ffi_string(fe_get_text(buffer_id)), "alpha");
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+    assert!(snapshot.contains("\"cursor_line\":0"));
+    assert!(snapshot.contains("\"cursor_column\":5"));
+
+    assert_eq!(fe_redo(buffer_id), 1);
+    assert_eq!(take_ffi_string(fe_get_text(buffer_id)), "alpha\nbeta");
+    let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+    assert!(snapshot.contains("\"cursor_line\":1"));
+    assert!(snapshot.contains("\"cursor_column\":2"));
+}
+
+#[test]
+fn ffi_undo_and_redo_report_noop_without_error() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(fe_undo(buffer_id), 0);
+    assert_eq!(take_ffi_string(fe_last_error()), "");
+    assert_eq!(fe_redo(buffer_id), 0);
+    assert_eq!(take_ffi_string(fe_last_error()), "");
 }
 
 #[test]

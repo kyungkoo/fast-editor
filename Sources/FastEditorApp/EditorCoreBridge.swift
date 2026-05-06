@@ -35,6 +35,12 @@ private func feReplaceTextWithCursor(
 @_silgen_name("fe_set_cursor_offset")
 private func feSetCursorOffset(_ bufferID: UInt64, _ cursorOffset: Int) -> Int32
 
+@_silgen_name("fe_undo")
+private func feUndo(_ bufferID: UInt64) -> Int32
+
+@_silgen_name("fe_redo")
+private func feRedo(_ bufferID: UInt64) -> Int32
+
 @_silgen_name("fe_save_file")
 private func feSaveFile(_ bufferID: UInt64) -> Int32
 
@@ -209,6 +215,14 @@ final class EditorCoreBridge: ObservableObject {
         syncRenderSnapshot()
     }
 
+    func undo() {
+        applyHistoryAction(feUndo, emptyMessage: "Nothing to undo")
+    }
+
+    func redo() {
+        applyHistoryAction(feRedo, emptyMessage: "Nothing to redo")
+    }
+
     private func syncTextFromCore() {
         guard hasOpenBuffer else {
             return
@@ -290,6 +304,24 @@ final class EditorCoreBridge: ObservableObject {
             syncRenderSnapshot()
             syncDirtyState()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
+        }
+    }
+
+    private func applyHistoryAction(_ action: (UInt64) -> Int32, emptyMessage: String) {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        let result = action(bufferID)
+        if result == 1 {
+            syncTextFromCore()
+            syncRenderSnapshot()
+            syncDirtyState()
+            statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
+        } else if result == 0 {
+            statusText = emptyMessage
+        } else {
+            reportLastError(prefix: "Edit history failed")
         }
     }
 
