@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var editor = EditorCoreBridge()
     @State private var renderMode = EditorRenderMode.appKit
+    @State private var showsMarkdownPreview = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,20 @@ struct ContentView: View {
 
     @ViewBuilder
     private var editorSurface: some View {
+        if showsMarkdownPreview {
+            HStack(spacing: 0) {
+                editorPane
+                Divider()
+                MarkdownPreview(html: editor.markdownPreviewHTML)
+                    .frame(minWidth: 280)
+            }
+        } else {
+            editorPane
+        }
+    }
+
+    @ViewBuilder
+    private var editorPane: some View {
         switch renderMode {
         case .appKit:
             AppKitTextEditor(
@@ -79,6 +94,10 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 170)
+
+            Toggle("Preview", isOn: $showsMarkdownPreview)
+                .toggleStyle(.switch)
+                .disabled(!editor.hasOpenBuffer)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

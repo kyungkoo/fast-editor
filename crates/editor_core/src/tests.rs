@@ -226,6 +226,49 @@ fn render_snapshot_exposes_markdown_highlight_spans() {
 }
 
 #[test]
+fn markdown_preview_html_renders_current_buffer_text() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text(
+        buffer_id,
+        "# Heading\n\n- item with `code`\n\n> quote\n\nA [link](https://example.com) and **bold**",
+    )
+    .expect("replace text");
+
+    let html = core
+        .markdown_preview_html(buffer_id)
+        .expect("markdown preview html");
+
+    assert!(html.contains("<h1>Heading</h1>"));
+    assert!(html.contains("<ul>"));
+    assert!(html.contains("<li>item with <code>code</code></li>"));
+    assert!(html.contains("<blockquote>quote</blockquote>"));
+    assert!(html.contains("<a href=\"https://example.com\">link</a>"));
+    assert!(html.contains("<strong>bold</strong>"));
+}
+
+#[test]
+fn markdown_preview_html_escapes_untrusted_content() {
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text(
+        buffer_id,
+        "# <script>alert(1)</script>\n[bad](\" onclick=\"alert(1))",
+    )
+    .expect("replace text");
+
+    let html = core
+        .markdown_preview_html(buffer_id)
+        .expect("markdown preview html");
+
+    assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(html.contains("href=\"&quot; onclick=&quot;alert(1\""));
+    assert!(!html.contains("<script>alert(1)</script>"));
+}
+
+#[test]
 fn cursor_offset_must_be_utf8_boundary() {
     let mut core = EditorCore::new();
     let buffer_id = core.new_file();
@@ -357,6 +400,19 @@ fn ffi_render_snapshot_includes_markdown_span_payload() {
     assert!(snapshot.contains("\"spans\""));
     assert!(snapshot.contains("\"kind\":\"markdown_heading\""));
     assert!(snapshot.contains("\"kind\":\"markdown_inline_code\""));
+}
+
+#[test]
+fn ffi_markdown_preview_html_uses_unsaved_buffer_text() {
+    let _guard = ffi_test_lock();
+    let buffer_id = fe_new_file();
+
+    assert_ne!(buffer_id, 0);
+    assert_eq!(ffi_replace_text(buffer_id, "# Draft"), 1);
+
+    let html = take_ffi_string(fe_get_markdown_preview_html(buffer_id));
+
+    assert!(html.contains("<h1>Draft</h1>"));
 }
 
 #[test]

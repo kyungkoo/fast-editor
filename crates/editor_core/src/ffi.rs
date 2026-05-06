@@ -138,6 +138,25 @@ pub extern "C" fn fe_get_render_snapshot(buffer_id: BufferId) -> FeString {
 }
 
 #[no_mangle]
+pub extern "C" fn fe_get_markdown_preview_html(buffer_id: BufferId) -> FeString {
+    let result = global_core()
+        .lock()
+        .map_err(|_| EditorError::MissingBuffer(buffer_id))
+        .and_then(|core| core.markdown_preview_html(buffer_id));
+
+    match result {
+        Ok(html) => {
+            clear_last_error();
+            FeString::from_string(html)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_get_path(buffer_id: BufferId) -> FeString {
     let result = global_core()
         .lock()
