@@ -484,10 +484,6 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func drawVisibleText(in context: CGContext) {
-        let firstLine = max(0, Int(scrollOffset.y / lineHeight))
-        let visibleLineCount = Int(ceil(bounds.height / lineHeight)) + 2
-        let endLine = min(snapshot.lines.count, firstLine + visibleLineCount)
-
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.textColor
@@ -497,7 +493,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             .foregroundColor: NSColor.secondaryLabelColor
         ]
 
-        for lineIndex in firstLine..<endLine {
+        for lineIndex in visibleLineRange {
             let line = snapshot.lines[lineIndex]
             let baselineY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y
             let lineNumber = "\(line.lineNumber)" as NSString
@@ -618,15 +614,11 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             return
         }
 
-        let firstLine = max(0, Int(scrollOffset.y / lineHeight))
-        let visibleLineCount = Int(ceil(bounds.height / lineHeight)) + 2
-        let endLine = min(snapshot.lines.count, firstLine + visibleLineCount)
-
         context.saveGState()
         context.clip(to: textClipRect)
         context.setFillColor(NSColor.selectedTextBackgroundColor.withAlphaComponent(0.45).cgColor)
 
-        for lineIndex in firstLine..<endLine {
+        for lineIndex in visibleLineRange {
             let line = snapshot.lines[lineIndex]
             let lineStart = utf8Offset(line: lineIndex, column: 0)
             let lineTextEnd = utf8Offset(line: lineIndex, column: line.text.count)
@@ -1093,6 +1085,15 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             y: 0,
             width: max(0, bounds.width - gutterWidth),
             height: bounds.height
+        )
+    }
+
+    private var visibleLineRange: Range<Int> {
+        TextEditingPrimitives.visibleLineRange(
+            scrollY: Double(scrollOffset.y),
+            viewportHeight: Double(bounds.height),
+            lineHeight: Double(lineHeight),
+            lineCount: snapshot.lines.count
         )
     }
 }

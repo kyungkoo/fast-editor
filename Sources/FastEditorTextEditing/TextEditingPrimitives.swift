@@ -132,6 +132,28 @@ public enum TextEditingPrimitives {
         return (text, range.lowerBound + replacement.utf8.count)
     }
 
+    public static func visibleLineRange(
+        scrollY: Double,
+        viewportHeight: Double,
+        lineHeight: Double,
+        lineCount: Int,
+        overscanLineCount: Int = 2
+    ) -> Range<Int> {
+        guard lineCount > 0, viewportHeight > 0, lineHeight > 0 else {
+            return 0..<0
+        }
+
+        let firstLine = min(
+            lineCount,
+            max(0, Int((max(0, scrollY) / lineHeight).rounded(.down)))
+        )
+        let visibleLineCount = max(1, Int((viewportHeight / lineHeight).rounded(.up)))
+            + max(0, overscanLineCount)
+        let endLine = min(lineCount, firstLine + visibleLineCount)
+
+        return firstLine..<endLine
+    }
+
     private static func isInsideCharacter(_ offset: Int, in text: String) -> Bool {
         var currentOffset = 0
 

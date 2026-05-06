@@ -83,4 +83,31 @@ struct TextEditingPrimitivesTests {
         #expect(result.text == "a한b")
         #expect(result.cursorUTF8Offset == "a한".utf8.count)
     }
+
+    @Test func visibleLineRangeTracksScrolledViewportWithOverscan() {
+        let range = TextEditingPrimitives.visibleLineRange(
+            scrollY: 45,
+            viewportHeight: 60,
+            lineHeight: 20,
+            lineCount: 20
+        )
+
+        #expect(range == 2..<7)
+    }
+
+    @Test func visibleLineRangeClampsInvalidAndOverscrolledInputs() {
+        #expect(TextEditingPrimitives.visibleLineRange(
+            scrollY: 0,
+            viewportHeight: 0,
+            lineHeight: 20,
+            lineCount: 20
+        ) == 0..<0)
+
+        #expect(TextEditingPrimitives.visibleLineRange(
+            scrollY: 10_000,
+            viewportHeight: 60,
+            lineHeight: 20,
+            lineCount: 20
+        ) == 20..<20)
+    }
 }
