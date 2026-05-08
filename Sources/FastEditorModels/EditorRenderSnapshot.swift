@@ -1,12 +1,28 @@
-struct EditorRenderSnapshot: Decodable, Equatable {
-    var bufferID: UInt64
-    var dirty: Bool
-    var language: EditorDocumentLanguage
-    var cursorLine: Int
-    var cursorColumn: Int
-    var lines: [EditorRenderLine]
+public struct EditorRenderSnapshot: Decodable, Equatable, Sendable {
+    public var bufferID: UInt64
+    public var dirty: Bool
+    public var language: EditorDocumentLanguage
+    public var cursorLine: Int
+    public var cursorColumn: Int
+    public var lines: [EditorRenderLine]
 
-    static let empty = EditorRenderSnapshot(
+    public init(
+        bufferID: UInt64,
+        dirty: Bool,
+        language: EditorDocumentLanguage,
+        cursorLine: Int,
+        cursorColumn: Int,
+        lines: [EditorRenderLine]
+    ) {
+        self.bufferID = bufferID
+        self.dirty = dirty
+        self.language = language
+        self.cursorLine = cursorLine
+        self.cursorColumn = cursorColumn
+        self.lines = lines
+    }
+
+    public static let empty = EditorRenderSnapshot(
         bufferID: 0,
         dirty: false,
         language: .plainText,
@@ -25,7 +41,7 @@ struct EditorRenderSnapshot: Decodable, Equatable {
     }
 }
 
-enum EditorDocumentLanguage: String, Decodable {
+public enum EditorDocumentLanguage: String, Decodable, Sendable {
     case plainText = "plain_text"
     case markdown
     case kotlin
@@ -33,11 +49,18 @@ enum EditorDocumentLanguage: String, Decodable {
     case swift
 }
 
-struct EditorRenderLine: Decodable, Equatable {
-    var index: Int
-    var lineNumber: Int
-    var text: String
-    var spans: [EditorRenderSpan]
+public struct EditorRenderLine: Decodable, Equatable, Sendable {
+    public var index: Int
+    public var lineNumber: Int
+    public var text: String
+    public var spans: [EditorRenderSpan]
+
+    public init(index: Int, lineNumber: Int, text: String, spans: [EditorRenderSpan]) {
+        self.index = index
+        self.lineNumber = lineNumber
+        self.text = text
+        self.spans = spans
+    }
 
     private enum CodingKeys: String, CodingKey {
         case index
@@ -47,10 +70,16 @@ struct EditorRenderLine: Decodable, Equatable {
     }
 }
 
-struct EditorRenderSpan: Decodable, Equatable {
-    var startColumn: Int
-    var endColumn: Int
-    var kind: EditorRenderSpanKind
+public struct EditorRenderSpan: Decodable, Equatable, Sendable {
+    public var startColumn: Int
+    public var endColumn: Int
+    public var kind: EditorRenderSpanKind
+
+    public init(startColumn: Int, endColumn: Int, kind: EditorRenderSpanKind) {
+        self.startColumn = startColumn
+        self.endColumn = endColumn
+        self.kind = kind
+    }
 
     private enum CodingKeys: String, CodingKey {
         case startColumn = "start_column"
@@ -59,7 +88,7 @@ struct EditorRenderSpan: Decodable, Equatable {
     }
 }
 
-enum EditorRenderSpanKind: String, Decodable {
+public enum EditorRenderSpanKind: String, Decodable, Sendable {
     case markdownHeading = "markdown_heading"
     case markdownListMarker = "markdown_list_marker"
     case markdownQuote = "markdown_quote"

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FastEditorApp
+@testable import FastEditorModels
 
 struct ProjectTaskSummaryTests {
     @Test func decodesAndroidTaskSummaryPayload() throws {

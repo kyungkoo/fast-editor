@@ -1,5 +1,5 @@
 import Testing
-@testable import FastEditorApp
+@testable import FastEditorModels
 
 struct AgentDiffPreviewTests {
     @Test func extractsReplacementBlockFromTranscript() {

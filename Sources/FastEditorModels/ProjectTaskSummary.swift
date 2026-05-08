@@ -1,20 +1,20 @@
 import Foundation
 
-struct ProjectTaskSummary: Decodable, Equatable {
-    var detections: [ProjectDetection]
-    var tasks: [ProjectTaskDefinition]
-    var android: AndroidTaskSummary?
+public struct ProjectTaskSummary: Decodable, Equatable, Sendable {
+    public var detections: [ProjectDetection]
+    public var tasks: [ProjectTaskDefinition]
+    public var android: AndroidTaskSummary?
 
-    static let empty = ProjectTaskSummary(detections: [], tasks: [], android: nil)
+    public static let empty = ProjectTaskSummary(detections: [], tasks: [], android: nil)
 }
 
-struct ProjectDetection: Decodable, Equatable, Identifiable {
-    var providerID: TaskProviderID
-    var confidence: DetectionConfidence
-    var projectRoot: String
-    var evidence: [String]
+public struct ProjectDetection: Decodable, Equatable, Sendable, Identifiable {
+    public var providerID: TaskProviderID
+    public var confidence: DetectionConfidence
+    public var projectRoot: String
+    public var evidence: [String]
 
-    var id: TaskProviderID { providerID }
+    public var id: TaskProviderID { providerID }
 
     private enum CodingKeys: String, CodingKey {
         case providerID = "provider_id"
@@ -24,12 +24,12 @@ struct ProjectDetection: Decodable, Equatable, Identifiable {
     }
 }
 
-struct ProjectTaskDefinition: Decodable, Equatable, Identifiable {
-    var providerID: TaskProviderID
-    var id: String
-    var label: String
-    var kind: TaskKind
-    var detail: String?
+public struct ProjectTaskDefinition: Decodable, Equatable, Sendable, Identifiable {
+    public var providerID: TaskProviderID
+    public var id: String
+    public var label: String
+    public var kind: TaskKind
+    public var detail: String?
 
     private enum CodingKeys: String, CodingKey {
         case providerID = "provider_id"
@@ -40,15 +40,15 @@ struct ProjectTaskDefinition: Decodable, Equatable, Identifiable {
     }
 }
 
-struct TaskExecutionPlan: Decodable, Equatable {
-    var providerID: TaskProviderID
-    var taskID: String
-    var program: String
-    var args: [String]
-    var cwd: String
-    var environment: [[String]]
+public struct TaskExecutionPlan: Decodable, Equatable, Sendable {
+    public var providerID: TaskProviderID
+    public var taskID: String
+    public var program: String
+    public var args: [String]
+    public var cwd: String
+    public var environment: [[String]]
 
-    var commandDisplay: String {
+    public var commandDisplay: String {
         ([program] + args).map(shellQuote).joined(separator: " ")
     }
 
@@ -62,18 +62,18 @@ struct TaskExecutionPlan: Decodable, Equatable {
     }
 }
 
-struct TaskDiagnostic: Decodable, Equatable, Identifiable {
-    var severity: TaskDiagnosticSeverity
-    var message: String
-    var file: String?
-    var line: Int?
-    var column: Int?
+public struct TaskDiagnostic: Decodable, Equatable, Sendable, Identifiable {
+    public var severity: TaskDiagnosticSeverity
+    public var message: String
+    public var file: String?
+    public var line: Int?
+    public var column: Int?
 
-    var id: String {
+    public var id: String {
         "\(severity.rawValue):\(file ?? ""):\(line ?? 0):\(column ?? 0):\(message)"
     }
 
-    var locationDisplay: String {
+    public var locationDisplay: String {
         guard let file else {
             return "Task output"
         }
@@ -89,15 +89,15 @@ struct TaskDiagnostic: Decodable, Equatable, Identifiable {
         return file
     }
 
-    var targetLineIndex: Int? {
+    public var targetLineIndex: Int? {
         line.map { max(0, $0 - 1) }
     }
 
-    var targetColumnIndex: Int? {
+    public var targetColumnIndex: Int? {
         column.map { max(0, $0 - 1) }
     }
 
-    func resolvedFileURL(workspaceURL: URL?) -> URL? {
+    public func resolvedFileURL(workspaceURL: URL?) -> URL? {
         guard let file, !file.isEmpty else {
             return nil
         }
@@ -116,18 +116,18 @@ struct TaskDiagnostic: Decodable, Equatable, Identifiable {
     }
 }
 
-enum TaskDiagnosticSeverity: String, Decodable, Equatable {
+public enum TaskDiagnosticSeverity: String, Decodable, Sendable, Equatable {
     case error
     case warning
     case note
 }
 
-enum TaskProviderID: String, Decodable, Equatable {
+public enum TaskProviderID: String, Decodable, Sendable, Equatable {
     case android
     case swiftPackage = "swift_package"
     case web
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .android:
             "Android"
@@ -139,13 +139,13 @@ enum TaskProviderID: String, Decodable, Equatable {
     }
 }
 
-enum DetectionConfidence: String, Decodable, Equatable {
+public enum DetectionConfidence: String, Decodable, Sendable, Equatable {
     case high
     case medium
     case low
 }
 
-enum TaskKind: String, Decodable, Equatable {
+public enum TaskKind: String, Decodable, Sendable, Equatable {
     case build
     case run
     case test
@@ -161,18 +161,18 @@ private func shellQuote(_ value: String) -> String {
     return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
 }
 
-struct AndroidTaskSummary: Decodable, Equatable {
-    var environment: AndroidEnvironmentInspection
-    var project: AndroidProjectDescription
+public struct AndroidTaskSummary: Decodable, Equatable, Sendable {
+    public var environment: AndroidEnvironmentInspection
+    public var project: AndroidProjectDescription
 }
 
-struct AndroidEnvironmentInspection: Decodable, Equatable {
-    var sdkLocation: String?
-    var androidHome: String?
-    var androidSDKRoot: String?
-    var androidCLIPath: String?
-    var gradleWrapperPath: String?
-    var notes: [String]
+public struct AndroidEnvironmentInspection: Decodable, Equatable, Sendable {
+    public var sdkLocation: String?
+    public var androidHome: String?
+    public var androidSDKRoot: String?
+    public var androidCLIPath: String?
+    public var gradleWrapperPath: String?
+    public var notes: [String]
 
     private enum CodingKeys: String, CodingKey {
         case sdkLocation = "sdk_location"
@@ -184,13 +184,13 @@ struct AndroidEnvironmentInspection: Decodable, Equatable {
     }
 }
 
-struct AndroidProjectDescription: Decodable, Equatable {
-    var projectRoot: String
-    var settingsFiles: [String]
-    var rootBuildFiles: [String]
-    var moduleBuildFiles: [String]
-    var manifestFiles: [String]
-    var hasGradleWrapper: Bool
+public struct AndroidProjectDescription: Decodable, Equatable, Sendable {
+    public var projectRoot: String
+    public var settingsFiles: [String]
+    public var rootBuildFiles: [String]
+    public var moduleBuildFiles: [String]
+    public var manifestFiles: [String]
+    public var hasGradleWrapper: Bool
 
     private enum CodingKeys: String, CodingKey {
         case projectRoot = "project_root"

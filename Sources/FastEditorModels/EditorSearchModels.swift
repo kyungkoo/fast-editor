@@ -1,23 +1,23 @@
 import Foundation
 import FastEditorTextEditing
 
-struct TextSearchMatch: Identifiable, Equatable {
-    var range: Range<Int>
-    var line: Int
-    var column: Int
-    var linePreview: String
+public struct TextSearchMatch: Identifiable, Equatable, Sendable {
+    public var range: Range<Int>
+    public var line: Int
+    public var column: Int
+    public var linePreview: String
 
-    var id: Int {
+    public var id: Int {
         range.lowerBound
     }
 
-    var displayLocation: String {
+    public var displayLocation: String {
         "\(line + 1):\(column + 1)"
     }
 }
 
-enum TextSearch {
-    static func matches(
+public enum TextSearch {
+    public static func matches(
         in text: String,
         query: String,
         caseInsensitive: Bool = true
@@ -58,26 +58,26 @@ enum TextSearch {
     }
 }
 
-struct WorkspaceSearchResult: Identifiable, Equatable {
-    var fileURL: URL
-    var displayPath: String
-    var line: Int
-    var column: Int
-    var preview: String
+public struct WorkspaceSearchResult: Identifiable, Equatable, Sendable {
+    public var fileURL: URL
+    public var displayPath: String
+    public var line: Int
+    public var column: Int
+    public var preview: String
 
-    var id: String {
+    public var id: String {
         "\(fileURL.path):\(line):\(column):\(preview)"
     }
 
-    var displayLocation: String {
+    public var displayLocation: String {
         "\(displayPath):\(line + 1):\(column + 1)"
     }
 }
 
-enum WorkspaceTextSearch {
-    static let resultLimit = 200
+public enum WorkspaceTextSearch {
+    public static let resultLimit = 200
 
-    static func search(
+    public static func search(
         query: String,
         workspaceURL: URL
     ) -> [WorkspaceSearchResult] {

@@ -1,17 +1,17 @@
 import Foundation
 
-struct AgentProposedEdit: Equatable {
-    var replacementText: String
-    var targetRange: Range<Int>?
+public struct AgentProposedEdit: Equatable, Sendable {
+    public var replacementText: String
+    public var targetRange: Range<Int>?
 
-    init(replacementText: String, targetRange: Range<Int>? = nil) {
+    public init(replacementText: String, targetRange: Range<Int>? = nil) {
         self.replacementText = replacementText
         self.targetRange = targetRange
     }
 }
 
-enum AgentDiffPreview {
-    static func extractProposedEdit(from transcript: String) -> AgentProposedEdit? {
+public enum AgentDiffPreview {
+    public static func extractProposedEdit(from transcript: String) -> AgentProposedEdit? {
         guard let range = fencedBlockRange(named: "fast-editor-replacement", in: transcript) else {
             return nil
         }
@@ -19,7 +19,7 @@ enum AgentDiffPreview {
         return AgentProposedEdit(replacementText: String(transcript[range]))
     }
 
-    static func unifiedPreview(
+    public static func unifiedPreview(
         original: String,
         replacement: String,
         path: String

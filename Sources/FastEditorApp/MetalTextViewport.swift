@@ -1,3 +1,4 @@
+import FastEditorModels
 import CoreGraphics
 import FastEditorTextEditing
 

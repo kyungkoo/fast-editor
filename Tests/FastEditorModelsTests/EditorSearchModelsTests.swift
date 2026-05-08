@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FastEditorApp
+@testable import FastEditorModels
 
 struct EditorSearchModelsTests {
     @Test func textSearchFindsMultibyteMatchesWithUTF8Ranges() {

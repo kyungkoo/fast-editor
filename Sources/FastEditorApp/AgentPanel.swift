@@ -1,3 +1,4 @@
+import FastEditorModels
 import SwiftUI
 
 struct AgentPanel: View {

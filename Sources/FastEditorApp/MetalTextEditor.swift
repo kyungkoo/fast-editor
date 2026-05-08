@@ -1,3 +1,4 @@
+import FastEditorModels
 import AppKit
 import CoreImage
 import FastEditorTextEditing

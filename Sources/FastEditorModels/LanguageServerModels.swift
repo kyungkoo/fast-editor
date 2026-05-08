@@ -1,11 +1,11 @@
 import Foundation
 
-enum LanguageServerID: String, CaseIterable, Equatable {
+public enum LanguageServerID: String, CaseIterable, Equatable, Sendable {
     case sourceKitLSP = "sourcekit-lsp"
     case rustAnalyzer = "rust-analyzer"
     case kotlinLanguageServer = "kotlin-language-server"
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .sourceKitLSP:
             "SourceKit-LSP"
@@ -16,7 +16,7 @@ enum LanguageServerID: String, CaseIterable, Equatable {
         }
     }
 
-    var supportedExtensions: Set<String> {
+    public var supportedExtensions: Set<String> {
         switch self {
         case .sourceKitLSP:
             ["swift"]
@@ -27,27 +27,27 @@ enum LanguageServerID: String, CaseIterable, Equatable {
         }
     }
 
-    var commandName: String {
+    public var commandName: String {
         rawValue
     }
 }
 
-struct LanguageServerProvider: Identifiable, Equatable {
-    var id: LanguageServerID
-    var executablePath: String?
-    var arguments: [String] = []
+public struct LanguageServerProvider: Identifiable, Equatable, Sendable {
+    public var id: LanguageServerID
+    public var executablePath: String?
+    public var arguments: [String] = []
 
-    var displayName: String {
+    public var displayName: String {
         id.displayName
     }
 
-    var available: Bool {
+    public var available: Bool {
         executablePath != nil
     }
 }
 
-enum LanguageServerDetector {
-    static func detect(
+public enum LanguageServerDetector {
+    public static func detect(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> [LanguageServerProvider] {
@@ -102,13 +102,13 @@ enum LanguageServerDetector {
     }
 }
 
-enum LanguageServerDocumentEvent: Equatable {
+public enum LanguageServerDocumentEvent: Equatable, Sendable {
     case didOpen(uri: String, languageID: String, version: Int, text: String)
     case didChange(uri: String, version: Int, text: String)
     case didSave(uri: String, text: String)
     case didClose(uri: String)
 
-    var method: String {
+    public var method: String {
         switch self {
         case .didOpen:
             "textDocument/didOpen"
@@ -121,7 +121,7 @@ enum LanguageServerDocumentEvent: Equatable {
         }
     }
 
-    var payload: [String: Any] {
+    public var payload: [String: Any] {
         switch self {
         case let .didOpen(uri, languageID, version, text):
             [
@@ -159,24 +159,24 @@ enum LanguageServerDocumentEvent: Equatable {
     }
 }
 
-struct LanguageServerDiagnostic: Identifiable, Equatable {
-    var fileURL: URL
-    var severity: TaskDiagnosticSeverity
-    var message: String
-    var line: Int
-    var column: Int
+public struct LanguageServerDiagnostic: Identifiable, Equatable, Sendable {
+    public var fileURL: URL
+    public var severity: TaskDiagnosticSeverity
+    public var message: String
+    public var line: Int
+    public var column: Int
 
-    var id: String {
+    public var id: String {
         "\(fileURL.path):\(line):\(column):\(severity.rawValue):\(message)"
     }
 
-    var locationDisplay: String {
+    public var locationDisplay: String {
         "\(fileURL.lastPathComponent):\(line + 1):\(column + 1)"
     }
 }
 
-enum LanguageServerDiagnosticsParser {
-    static func diagnostics(from jsonData: Data) -> [LanguageServerDiagnostic] {
+public enum LanguageServerDiagnosticsParser {
+    public static func diagnostics(from jsonData: Data) -> [LanguageServerDiagnostic] {
         guard let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
               object["method"] as? String == "textDocument/publishDiagnostics",
               let params = object["params"] as? [String: Any],
@@ -220,10 +220,12 @@ enum LanguageServerDiagnosticsParser {
     }
 }
 
-struct LanguageServerMessageFramer {
+public struct LanguageServerMessageFramer {
     private(set) var bufferedData = Data()
 
-    mutating func append(_ data: Data) -> [Data] {
+    public init() {}
+
+    public mutating func append(_ data: Data) -> [Data] {
         bufferedData.append(data)
         var messages: [Data] = []
 

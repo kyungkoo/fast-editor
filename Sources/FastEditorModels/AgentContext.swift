@@ -1,36 +1,50 @@
 import Foundation
 import FastEditorTextEditing
 
-struct AgentContext: Equatable {
-    struct SelectionMetadata: Equatable {
-        var utf8Range: Range<Int>
-        var startLine: Int
-        var startColumn: Int
-        var endLine: Int
-        var endColumn: Int
+public struct AgentContext: Equatable, Sendable {
+    public struct SelectionMetadata: Equatable, Sendable {
+        public var utf8Range: Range<Int>
+        public var startLine: Int
+        public var startColumn: Int
+        public var endLine: Int
+        public var endColumn: Int
 
-        var displayRange: String {
+        public var displayRange: String {
             "\(startLine + 1):\(startColumn + 1)-\(endLine + 1):\(endColumn + 1)"
         }
 
-        var byteRange: String {
+        public var byteRange: String {
             "\(utf8Range.lowerBound)..<\(utf8Range.upperBound)"
+        }
+
+        public init(
+            utf8Range: Range<Int>,
+            startLine: Int,
+            startColumn: Int,
+            endLine: Int,
+            endColumn: Int
+        ) {
+            self.utf8Range = utf8Range
+            self.startLine = startLine
+            self.startColumn = startColumn
+            self.endLine = endLine
+            self.endColumn = endColumn
         }
     }
 
-    var fileURL: URL?
-    var text: String
-    var selection: SelectionMetadata?
+    public var fileURL: URL?
+    public var text: String
+    public var selection: SelectionMetadata?
 
-    var path: String {
+    public var path: String {
         fileURL?.path ?? "Untitled"
     }
 
-    var isSelection: Bool {
+    public var isSelection: Bool {
         selection != nil
     }
 
-    var transcriptSummary: String {
+    public var transcriptSummary: String {
         if let selection {
             return "Context: selection \(path):\(selection.displayRange) bytes \(selection.byteRange)"
         }
@@ -38,7 +52,7 @@ struct AgentContext: Equatable {
         return "Context: full file \(path)"
     }
 
-    var requestScopeDescription: String {
+    public var requestScopeDescription: String {
         if let selection {
             return """
             Context scope: selected text
@@ -54,7 +68,7 @@ struct AgentContext: Equatable {
         """
     }
 
-    var editInstruction: String {
+    public var editInstruction: String {
         if selection != nil {
             return "If you propose an edit, include only the replacement text for the selected range in a fenced block named `fast-editor-replacement`."
         }
@@ -62,7 +76,7 @@ struct AgentContext: Equatable {
         return "If you propose a file edit, include the complete replacement text in a fenced block named `fast-editor-replacement`."
     }
 
-    static func currentFile(fileURL: URL?, text: String, selectedRange: Range<Int>?) -> AgentContext {
+    public static func currentFile(fileURL: URL?, text: String, selectedRange: Range<Int>?) -> AgentContext {
         guard let selectedRange else {
             return AgentContext(fileURL: fileURL, text: text, selection: nil)
         }

@@ -1,25 +1,25 @@
 import Foundation
 
-struct WorkspaceFileNode: Identifiable, Equatable {
-    var url: URL
-    var name: String
-    var isDirectory: Bool
-    var children: [WorkspaceFileNode]?
+public struct WorkspaceFileNode: Identifiable, Equatable, Sendable {
+    public var url: URL
+    public var name: String
+    public var isDirectory: Bool
+    public var children: [WorkspaceFileNode]?
 
-    var id: String {
+    public var id: String {
         url.path
     }
 
-    static func roots(in workspaceURL: URL) -> [WorkspaceFileNode] {
+    public static func roots(in workspaceURL: URL) -> [WorkspaceFileNode] {
         children(in: workspaceURL)
     }
 
-    static func searchableFileURLs(in workspaceURL: URL) -> [URL] {
+    public static func searchableFileURLs(in workspaceURL: URL) -> [URL] {
         children(in: workspaceURL)
             .flatMap(\.searchableFileURLs)
     }
 
-    static func isIgnoredDirectoryName(_ name: String) -> Bool {
+    public static func isIgnoredDirectoryName(_ name: String) -> Bool {
         ignoredDirectoryNames.contains(name)
     }
 

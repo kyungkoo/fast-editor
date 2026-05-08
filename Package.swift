@@ -8,13 +8,18 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "FastEditorModels", targets: ["FastEditorModels"]),
         .executable(name: "FastEditor", targets: ["FastEditorApp"])
     ],
     targets: [
         .target(name: "FastEditorTextEditing"),
+        .target(
+            name: "FastEditorModels",
+            dependencies: ["FastEditorTextEditing"]
+        ),
         .executableTarget(
             name: "FastEditorApp",
-            dependencies: ["FastEditorTextEditing"],
+            dependencies: ["FastEditorModels", "FastEditorTextEditing"],
             linkerSettings: [
                 .unsafeFlags([
                     "-L", "target/debug",
@@ -29,8 +34,12 @@ let package = Package(
             dependencies: ["FastEditorTextEditing"]
         ),
         .testTarget(
+            name: "FastEditorModelsTests",
+            dependencies: ["FastEditorModels"]
+        ),
+        .testTarget(
             name: "FastEditorAppTests",
-            dependencies: ["FastEditorApp"]
+            dependencies: ["FastEditorApp", "FastEditorModels"]
         )
     ]
 )
