@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::{BufferId, EditorCore, EditorError, RenderSpanKind};
+use crate::{BufferId, DocumentLanguage, EditorCore, EditorError, RenderSpanKind};
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -239,6 +239,290 @@ fn render_snapshot_exposes_markdown_highlight_spans() {
 }
 
 #[test]
+fn render_snapshot_detects_language_from_file_extension() {
+    let cases = [
+        ("md", DocumentLanguage::Markdown),
+        ("markdown", DocumentLanguage::Markdown),
+        ("kt", DocumentLanguage::Kotlin),
+        ("kts", DocumentLanguage::Kotlin),
+        ("rs", DocumentLanguage::Rust),
+        ("swift", DocumentLanguage::Swift),
+        ("txt", DocumentLanguage::PlainText),
+    ];
+    let mut paths = Vec::new();
+    let mut core = EditorCore::new();
+
+    for (extension, expected_language) in cases {
+        let path = make_temp_path(
+            &format!("render_snapshot_detects_language_from_file_extension_{extension}"),
+            extension,
+        );
+        fs::write(&path, sample_text_for_language(expected_language)).expect("write temp file");
+        let buffer_id = core.open_file(&path).expect("open file");
+
+        let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+        assert_eq!(snapshot.language, expected_language);
+        paths.push(path);
+    }
+
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
+fn save_file_as_reclassifies_language_for_highlighting() {
+    let path = make_temp_path(
+        "save_file_as_reclassifies_language_for_highlighting",
+        "swift",
+    );
+    let mut core = EditorCore::new();
+    let buffer_id = core.new_file();
+
+    core.replace_text(buffer_id, "func count() -> Int {\n    return 7\n}\n")
+        .expect("replace text");
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+    assert_eq!(snapshot.language, DocumentLanguage::Markdown);
+    assert!(snapshot.lines[0].spans.is_empty());
+
+    core.save_file_as(buffer_id, &path).expect("save file as");
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Swift);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftNumber));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn tree_sitter_highlight_spans_convert_byte_columns_to_character_columns() {
+    let cases = [
+        (
+            "kt",
+            DocumentLanguage::Kotlin,
+            "val 한글 = 42",
+            RenderSpanKind::KotlinNumber,
+        ),
+        (
+            "rs",
+            DocumentLanguage::Rust,
+            "let 한글 = 42;",
+            RenderSpanKind::RustNumber,
+        ),
+        (
+            "swift",
+            DocumentLanguage::Swift,
+            "let 한글 = 42",
+            RenderSpanKind::SwiftNumber,
+        ),
+    ];
+    let mut paths = Vec::new();
+    let mut core = EditorCore::new();
+
+    for (extension, language, text, kind) in cases {
+        let path = make_temp_path(
+            &format!("tree_sitter_highlight_spans_convert_byte_columns_{extension}"),
+            extension,
+        );
+        fs::write(&path, text).expect("write temp file");
+        let buffer_id = core.open_file(&path).expect("open file");
+
+        let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+        let span = snapshot.lines[0]
+            .spans
+            .iter()
+            .find(|span| span.kind == kind)
+            .expect("number span");
+
+        assert_eq!(snapshot.language, language);
+        assert_eq!(span.start_column, 9);
+        assert_eq!(span.end_column, 11);
+        paths.push(path);
+    }
+
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
+fn render_snapshot_exposes_tree_sitter_rust_highlight_spans() {
+    let path = make_temp_path(
+        "render_snapshot_exposes_tree_sitter_rust_highlight_spans",
+        "rs",
+    );
+    fs::write(
+        &path,
+        "#[test]\nfn greet(name: &str) -> String {\n    format!(\"hello {name}\")\n}\n",
+    )
+    .expect("write temp rust file");
+    let mut core = EditorCore::new();
+    let buffer_id = core.open_file(&path).expect("open rust file");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Rust);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustAttribute));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustKeyword));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustType));
+    assert!(snapshot.lines[2]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustString));
+
+    core.replace_text(buffer_id, "fn count() -> usize {\n    42\n}\n")
+        .expect("replace rust text");
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Rust);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::RustNumber));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn render_snapshot_exposes_tree_sitter_kotlin_highlight_spans() {
+    let path = make_temp_path(
+        "render_snapshot_exposes_tree_sitter_kotlin_highlight_spans",
+        "kt",
+    );
+    fs::write(
+        &path,
+        "@Test\nfun greet(name: String): String {\n    val count = 42\n    return \"hello $name\"\n}\n",
+    )
+    .expect("write temp kotlin file");
+    let mut core = EditorCore::new();
+    let buffer_id = core.open_file(&path).expect("open kotlin file");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Kotlin);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinAnnotation));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinKeyword));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinType));
+    assert!(snapshot.lines[2]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinNumber));
+    assert!(snapshot.lines[3]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinString));
+
+    core.replace_text(buffer_id, "fun count(): Int {\n    return 7\n}\n")
+        .expect("replace kotlin text");
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Kotlin);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::KotlinNumber));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn render_snapshot_exposes_tree_sitter_swift_highlight_spans() {
+    let path = make_temp_path(
+        "render_snapshot_exposes_tree_sitter_swift_highlight_spans",
+        "swift",
+    );
+    fs::write(
+        &path,
+        "@MainActor\nfunc greet(name: String) -> String {\n    let count = 42\n    return \"hello \\(name)\"\n}\n",
+    )
+    .expect("write temp swift file");
+    let mut core = EditorCore::new();
+    let buffer_id = core.open_file(&path).expect("open swift file");
+
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Swift);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftAttribute));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftKeyword));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftType));
+    assert!(snapshot.lines[2]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftNumber));
+    assert!(snapshot.lines[3]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftString));
+
+    core.replace_text(buffer_id, "func count() -> Int {\n    return 7\n}\n")
+        .expect("replace swift text");
+    let snapshot = core.render_snapshot(buffer_id).expect("render snapshot");
+
+    assert_eq!(snapshot.language, DocumentLanguage::Swift);
+    assert!(snapshot.lines[0]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftFunction));
+    assert!(snapshot.lines[1]
+        .spans
+        .iter()
+        .any(|span| span.kind == RenderSpanKind::SwiftNumber));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn markdown_preview_html_renders_current_buffer_text() {
     let mut core = EditorCore::new();
     let buffer_id = core.new_file();
@@ -438,6 +722,51 @@ fn ffi_render_snapshot_includes_markdown_span_payload() {
     assert!(snapshot.contains("\"spans\""));
     assert!(snapshot.contains("\"kind\":\"markdown_heading\""));
     assert!(snapshot.contains("\"kind\":\"markdown_inline_code\""));
+}
+
+#[test]
+fn ffi_render_snapshot_includes_tree_sitter_language_and_span_payload() {
+    let _guard = ffi_test_lock();
+    let cases = [
+        (
+            "kt",
+            "fun count(): Int {\n    return 7\n}\n",
+            "\"language\":\"kotlin\"",
+            "\"kind\":\"kotlin_function\"",
+        ),
+        (
+            "rs",
+            "fn count() -> usize {\n    7\n}\n",
+            "\"language\":\"rust\"",
+            "\"kind\":\"rust_function\"",
+        ),
+        (
+            "swift",
+            "func count() -> Int {\n    return 7\n}\n",
+            "\"language\":\"swift\"",
+            "\"kind\":\"swift_function\"",
+        ),
+    ];
+    let mut paths = Vec::new();
+
+    for (extension, text, language_payload, span_payload) in cases {
+        let path = make_temp_path(
+            &format!("ffi_render_snapshot_includes_tree_sitter_payload_{extension}"),
+            extension,
+        );
+        fs::write(&path, text).expect("write temp file");
+        let buffer_id = ffi_open_file(&path);
+
+        let snapshot = take_ffi_string(fe_get_render_snapshot(buffer_id));
+
+        assert!(snapshot.contains(language_payload));
+        assert!(snapshot.contains(span_payload));
+        paths.push(path);
+    }
+
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
 }
 
 #[test]
@@ -662,6 +991,16 @@ fn ffi_replace_text_with_cursor(buffer_id: BufferId, text: &str, cursor_offset: 
 fn ffi_save_file_as(buffer_id: BufferId, path: &Path) -> i32 {
     let path = CString::new(path.to_string_lossy().as_bytes()).expect("ffi path");
     fe_save_file_as(buffer_id, path.as_ptr())
+}
+
+fn sample_text_for_language(language: DocumentLanguage) -> &'static str {
+    match language {
+        DocumentLanguage::Markdown => "# Heading",
+        DocumentLanguage::Kotlin => "fun count(): Int {\n    return 7\n}\n",
+        DocumentLanguage::Rust => "fn count() -> usize {\n    7\n}\n",
+        DocumentLanguage::Swift => "func count() -> Int {\n    return 7\n}\n",
+        DocumentLanguage::PlainText => "plain text",
+    }
 }
 
 fn write_temp_file(name: &str, text: &str) -> PathBuf {

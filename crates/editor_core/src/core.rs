@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use tree_sitter::{Node, Parser};
 
 pub type BufferId = u64;
 
@@ -52,6 +53,7 @@ pub struct BufferSnapshot {
 pub struct RenderSnapshot {
     pub buffer_id: BufferId,
     pub dirty: bool,
+    pub language: DocumentLanguage,
     pub cursor_line: usize,
     pub cursor_column: usize,
     pub lines: Vec<RenderLine>,
@@ -82,11 +84,43 @@ pub enum RenderSpanKind {
     MarkdownInlineCode,
     MarkdownLink,
     MarkdownEmphasis,
+    KotlinKeyword,
+    KotlinType,
+    KotlinFunction,
+    KotlinString,
+    KotlinComment,
+    KotlinNumber,
+    KotlinAnnotation,
+    RustKeyword,
+    RustType,
+    RustFunction,
+    RustString,
+    RustComment,
+    RustNumber,
+    RustAttribute,
+    SwiftKeyword,
+    SwiftType,
+    SwiftFunction,
+    SwiftString,
+    SwiftComment,
+    SwiftNumber,
+    SwiftAttribute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentLanguage {
+    PlainText,
+    Markdown,
+    Kotlin,
+    Rust,
+    Swift,
 }
 
 #[derive(Debug, Clone)]
 struct Buffer {
     path: Option<PathBuf>,
+    language: DocumentLanguage,
     text: String,
     saved_text: String,
     cursor_offset: usize,
@@ -120,6 +154,7 @@ impl EditorCore {
             id,
             Buffer {
                 path: None,
+                language: DocumentLanguage::Markdown,
                 text: String::new(),
                 saved_text: String::new(),
                 cursor_offset: 0,
@@ -133,11 +168,13 @@ impl EditorCore {
     pub fn open_file(&mut self, path: impl AsRef<Path>) -> Result<BufferId, EditorError> {
         let path = path.as_ref().to_path_buf();
         let text = fs::read_to_string(&path)?;
+        let language = DocumentLanguage::for_path(&path);
         let id = self.allocate_buffer_id();
         self.buffers.insert(
             id,
             Buffer {
                 path: Some(path),
+                language,
                 saved_text: text.clone(),
                 text,
                 cursor_offset: 0,
@@ -230,6 +267,7 @@ impl EditorCore {
         let path = path.as_ref().to_path_buf();
         let buffer = self.buffer_mut(buffer_id)?;
         fs::write(&path, &buffer.text)?;
+        buffer.language = DocumentLanguage::for_path(&path);
         buffer.path = Some(path);
         buffer.saved_text = buffer.text.clone();
         Ok(())
@@ -256,12 +294,13 @@ impl EditorCore {
 
     pub fn render_snapshot(&self, buffer_id: BufferId) -> Result<RenderSnapshot, EditorError> {
         let buffer = self.buffer(buffer_id)?;
-        let lines = split_render_lines(&buffer.text);
+        let lines = split_render_lines(&buffer.text, buffer.language);
         let (cursor_line, cursor_column) = cursor_position(&buffer.text, buffer.cursor_offset);
 
         Ok(RenderSnapshot {
             buffer_id,
             dirty: buffer.text != buffer.saved_text,
+            language: buffer.language,
             cursor_line,
             cursor_column,
             lines,
@@ -342,7 +381,19 @@ impl Buffer {
     }
 }
 
-fn split_render_lines(text: &str) -> Vec<RenderLine> {
+impl DocumentLanguage {
+    fn for_path(path: &Path) -> Self {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("md" | "markdown" | "mdown" | "mkd") => DocumentLanguage::Markdown,
+            Some("kt" | "kts") => DocumentLanguage::Kotlin,
+            Some("rs") => DocumentLanguage::Rust,
+            Some("swift") => DocumentLanguage::Swift,
+            _ => DocumentLanguage::PlainText,
+        }
+    }
+}
+
+fn split_render_lines(text: &str, language: DocumentLanguage) -> Vec<RenderLine> {
     let mut lines: Vec<RenderLine> = text
         .split('\n')
         .enumerate()
@@ -350,7 +401,7 @@ fn split_render_lines(text: &str) -> Vec<RenderLine> {
             index,
             line_number: index + 1,
             text: line.trim_end_matches('\r').to_owned(),
-            spans: markdown_spans(line.trim_end_matches('\r')),
+            spans: Vec::new(),
         })
         .collect();
 
@@ -363,7 +414,430 @@ fn split_render_lines(text: &str) -> Vec<RenderLine> {
         });
     }
 
+    match language {
+        DocumentLanguage::Markdown => {
+            for line in &mut lines {
+                line.spans = markdown_spans(&line.text);
+            }
+        }
+        DocumentLanguage::Rust => {
+            for (line_index, span) in rust_spans(text, &lines) {
+                if let Some(line) = lines.get_mut(line_index) {
+                    line.spans.push(span);
+                }
+            }
+
+            for line in &mut lines {
+                line.spans
+                    .sort_by_key(|span| (span.start_column, span.end_column));
+            }
+        }
+        DocumentLanguage::Kotlin => {
+            for (line_index, span) in kotlin_spans(text, &lines) {
+                if let Some(line) = lines.get_mut(line_index) {
+                    line.spans.push(span);
+                }
+            }
+
+            for line in &mut lines {
+                line.spans
+                    .sort_by_key(|span| (span.start_column, span.end_column));
+            }
+        }
+        DocumentLanguage::Swift => {
+            for (line_index, span) in swift_spans(text, &lines) {
+                if let Some(line) = lines.get_mut(line_index) {
+                    line.spans.push(span);
+                }
+            }
+
+            for line in &mut lines {
+                line.spans
+                    .sort_by_key(|span| (span.start_column, span.end_column));
+            }
+        }
+        DocumentLanguage::PlainText => {}
+    }
+
     lines
+}
+
+fn swift_spans(text: &str, lines: &[RenderLine]) -> Vec<(usize, RenderSpan)> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_swift::LANGUAGE.into();
+    if parser.set_language(&language).is_err() {
+        return Vec::new();
+    }
+
+    let Some(tree) = parser.parse(text, None) else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    collect_swift_spans(tree.root_node(), lines, &mut spans);
+    spans
+}
+
+fn collect_swift_spans(node: Node<'_>, lines: &[RenderLine], spans: &mut Vec<(usize, RenderSpan)>) {
+    if let Some(kind) = swift_node_span_kind(node) {
+        push_node_spans(node, kind, lines, spans);
+    }
+
+    if let Some(name) = swift_named_child_for_span(node) {
+        push_node_spans(name, RenderSpanKind::SwiftFunction, lines, spans);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_swift_spans(child, lines, spans);
+    }
+}
+
+fn swift_named_child_for_span(node: Node<'_>) -> Option<Node<'_>> {
+    match node.kind() {
+        "function_declaration" => first_named_child_with_kind(node, "simple_identifier")
+            .or_else(|| first_named_child_with_kind(node, "identifier")),
+        "call_expression" => node
+            .child_by_field_name("function")
+            .or_else(|| first_named_child_with_kind(node, "simple_identifier"))
+            .or_else(|| first_named_child_with_kind(node, "identifier")),
+        _ => None,
+    }
+}
+
+fn swift_node_span_kind(node: Node<'_>) -> Option<RenderSpanKind> {
+    let kind = node.kind();
+    if swift_keyword_kind(kind) {
+        return Some(RenderSpanKind::SwiftKeyword);
+    }
+
+    match kind {
+        "attribute" | "attribute_argument_clause" => Some(RenderSpanKind::SwiftAttribute),
+        "comment" | "line_comment" | "multiline_comment" => Some(RenderSpanKind::SwiftComment),
+        "line_string_literal"
+        | "multi_line_string_literal"
+        | "raw_string_literal"
+        | "simple_string_literal"
+        | "string_literal" => Some(RenderSpanKind::SwiftString),
+        "integer_literal" | "real_literal" | "float_literal" => Some(RenderSpanKind::SwiftNumber),
+        "type_identifier" | "user_type" | "simple_type_identifier" => {
+            Some(RenderSpanKind::SwiftType)
+        }
+        _ => None,
+    }
+}
+
+fn swift_keyword_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "actor"
+            | "as"
+            | "associatedtype"
+            | "async"
+            | "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "continue"
+            | "defer"
+            | "deinit"
+            | "do"
+            | "else"
+            | "enum"
+            | "extension"
+            | "fallthrough"
+            | "false"
+            | "for"
+            | "func"
+            | "guard"
+            | "if"
+            | "import"
+            | "in"
+            | "init"
+            | "inout"
+            | "let"
+            | "nil"
+            | "operator"
+            | "private"
+            | "protocol"
+            | "public"
+            | "repeat"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "subscript"
+            | "super"
+            | "switch"
+            | "throw"
+            | "throws"
+            | "true"
+            | "try"
+            | "typealias"
+            | "var"
+            | "where"
+            | "while"
+    )
+}
+
+fn kotlin_spans(text: &str, lines: &[RenderLine]) -> Vec<(usize, RenderSpan)> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_kotlin_sg::LANGUAGE.into();
+    if parser.set_language(&language).is_err() {
+        return Vec::new();
+    }
+
+    let Some(tree) = parser.parse(text, None) else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    collect_kotlin_spans(tree.root_node(), lines, &mut spans);
+    spans
+}
+
+fn collect_kotlin_spans(
+    node: Node<'_>,
+    lines: &[RenderLine],
+    spans: &mut Vec<(usize, RenderSpan)>,
+) {
+    if let Some(kind) = kotlin_node_span_kind(node) {
+        push_node_spans(node, kind, lines, spans);
+    }
+
+    if let Some(name) = kotlin_named_child_for_span(node) {
+        push_node_spans(name, RenderSpanKind::KotlinFunction, lines, spans);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_kotlin_spans(child, lines, spans);
+    }
+}
+
+fn kotlin_named_child_for_span(node: Node<'_>) -> Option<Node<'_>> {
+    match node.kind() {
+        "function_declaration" | "call_expression" => {
+            first_named_child_with_kind(node, "simple_identifier")
+        }
+        _ => None,
+    }
+}
+
+fn kotlin_node_span_kind(node: Node<'_>) -> Option<RenderSpanKind> {
+    let kind = node.kind();
+    if kotlin_keyword_kind(kind) {
+        return Some(RenderSpanKind::KotlinKeyword);
+    }
+
+    match kind {
+        "annotation" | "annotation_use_site_target" => Some(RenderSpanKind::KotlinAnnotation),
+        "line_comment" | "multiline_comment" => Some(RenderSpanKind::KotlinComment),
+        "string_literal"
+        | "line_string_literal"
+        | "multi_line_string_literal"
+        | "character_literal" => Some(RenderSpanKind::KotlinString),
+        "integer_literal" | "real_literal" | "hex_literal" | "bin_literal" | "long_literal"
+        | "unsigned_literal" => Some(RenderSpanKind::KotlinNumber),
+        "type_identifier" | "user_type" | "nullable_type" => Some(RenderSpanKind::KotlinType),
+        _ => None,
+    }
+}
+
+fn kotlin_keyword_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "as" | "break"
+            | "by"
+            | "catch"
+            | "class"
+            | "companion"
+            | "const"
+            | "constructor"
+            | "continue"
+            | "data"
+            | "do"
+            | "else"
+            | "enum"
+            | "false"
+            | "finally"
+            | "for"
+            | "fun"
+            | "if"
+            | "import"
+            | "in"
+            | "interface"
+            | "is"
+            | "null"
+            | "object"
+            | "package"
+            | "return"
+            | "super"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typealias"
+            | "val"
+            | "var"
+            | "when"
+            | "while"
+    )
+}
+
+fn first_named_child_with_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    let child = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    child
+}
+
+fn rust_spans(text: &str, lines: &[RenderLine]) -> Vec<(usize, RenderSpan)> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+    if parser.set_language(&language).is_err() {
+        return Vec::new();
+    }
+
+    let Some(tree) = parser.parse(text, None) else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    collect_rust_spans(tree.root_node(), lines, &mut spans);
+    spans
+}
+
+fn collect_rust_spans(node: Node<'_>, lines: &[RenderLine], spans: &mut Vec<(usize, RenderSpan)>) {
+    if let Some(kind) = rust_node_span_kind(node) {
+        push_node_spans(node, kind, lines, spans);
+    }
+
+    if let Some(name) = rust_named_child_for_span(node) {
+        push_node_spans(name, RenderSpanKind::RustFunction, lines, spans);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_rust_spans(child, lines, spans);
+    }
+}
+
+fn rust_named_child_for_span(node: Node<'_>) -> Option<Node<'_>> {
+    match node.kind() {
+        "function_item" => node.child_by_field_name("name"),
+        "call_expression" => node.child_by_field_name("function"),
+        "macro_invocation" => node.child_by_field_name("macro"),
+        _ => None,
+    }
+}
+
+fn rust_node_span_kind(node: Node<'_>) -> Option<RenderSpanKind> {
+    let kind = node.kind();
+    if rust_keyword_kind(kind) {
+        return Some(RenderSpanKind::RustKeyword);
+    }
+
+    match kind {
+        "attribute_item" | "inner_attribute_item" => Some(RenderSpanKind::RustAttribute),
+        "line_comment" | "block_comment" => Some(RenderSpanKind::RustComment),
+        "string_literal" | "raw_string_literal" | "char_literal" => {
+            Some(RenderSpanKind::RustString)
+        }
+        "integer_literal" | "float_literal" => Some(RenderSpanKind::RustNumber),
+        "primitive_type" | "type_identifier" => Some(RenderSpanKind::RustType),
+        _ => None,
+    }
+}
+
+fn rust_keyword_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "as" | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+    )
+}
+
+fn push_node_spans(
+    node: Node<'_>,
+    kind: RenderSpanKind,
+    lines: &[RenderLine],
+    spans: &mut Vec<(usize, RenderSpan)>,
+) {
+    let start = node.start_position();
+    let end = node.end_position();
+
+    for line_index in start.row..=end.row {
+        let Some(line) = lines.get(line_index) else {
+            continue;
+        };
+
+        let start_column = if line_index == start.row {
+            byte_column_to_char_column(&line.text, start.column)
+        } else {
+            0
+        };
+        let end_column = if line_index == end.row {
+            byte_column_to_char_column(&line.text, end.column)
+        } else {
+            line.text.chars().count()
+        };
+
+        if start_column < end_column {
+            spans.push((
+                line_index,
+                RenderSpan {
+                    start_column,
+                    end_column,
+                    kind,
+                },
+            ));
+        }
+    }
+}
+
+fn byte_column_to_char_column(line: &str, byte_column: usize) -> usize {
+    let byte_column = byte_column.min(line.len());
+    let boundary = clamp_to_char_boundary(line, byte_column);
+    line[..boundary].chars().count()
 }
 
 fn markdown_spans(line: &str) -> Vec<RenderSpan> {

@@ -576,7 +576,9 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             attributes[.font] = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
         case .markdownCode, .markdownInlineCode:
             attributes[.backgroundColor] = NSColor.controlBackgroundColor
-        case .markdownEmphasis:
+        case .markdownEmphasis, .kotlinKeyword, .kotlinType, .kotlinFunction,
+             .rustKeyword, .rustType, .rustFunction,
+             .swiftKeyword, .swiftType, .swiftFunction:
             attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
         default:
             break
@@ -599,6 +601,48 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             return .systemBlue
         case .markdownEmphasis:
             return .systemPink
+        case .kotlinKeyword:
+            return .systemPink
+        case .kotlinType:
+            return .systemTeal
+        case .kotlinFunction:
+            return .systemBlue
+        case .kotlinString:
+            return .systemGreen
+        case .kotlinComment:
+            return .secondaryLabelColor
+        case .kotlinNumber:
+            return .systemOrange
+        case .kotlinAnnotation:
+            return .systemPurple
+        case .rustKeyword:
+            return .systemPink
+        case .rustType:
+            return .systemTeal
+        case .rustFunction:
+            return .systemBlue
+        case .rustString:
+            return .systemGreen
+        case .rustComment:
+            return .secondaryLabelColor
+        case .rustNumber:
+            return .systemOrange
+        case .rustAttribute:
+            return .systemPurple
+        case .swiftKeyword:
+            return .systemPink
+        case .swiftType:
+            return .systemTeal
+        case .swiftFunction:
+            return .systemBlue
+        case .swiftString:
+            return .systemGreen
+        case .swiftComment:
+            return .secondaryLabelColor
+        case .swiftNumber:
+            return .systemOrange
+        case .swiftAttribute:
+            return .systemPurple
         }
     }
 

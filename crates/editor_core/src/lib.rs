@@ -5,6 +5,6 @@ mod ffi;
 mod tests;
 
 pub use core::{
-    BufferId, BufferSnapshot, EditorCore, EditorError, RenderLine, RenderSnapshot, RenderSpan,
-    RenderSpanKind,
+    BufferId, BufferSnapshot, DocumentLanguage, EditorCore, EditorError, RenderLine,
+    RenderSnapshot, RenderSpan, RenderSpanKind,
 };
