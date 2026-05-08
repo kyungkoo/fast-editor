@@ -184,6 +184,16 @@ final class EditorCoreBridge: ObservableObject {
         applyHistoryAction(feRedo, emptyMessage: "Nothing to redo")
     }
 
+    func applyAgentReplacement(_ replacement: String) {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        text = replacement
+        replaceText(replacement)
+        focusRevision += 1
+    }
+
     private func syncTextFromCore() {
         guard hasOpenBuffer else {
             return

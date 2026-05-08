@@ -6,6 +6,7 @@ final class AgentPanelModel: ObservableObject {
     @Published var selectedProviderID: AgentProviderID?
     @Published var prompt = ""
     @Published private(set) var transcript = ""
+    @Published private(set) var proposedEdit: AgentProposedEdit?
     @Published private(set) var isRunning = false
     @Published private(set) var statusText = "Detecting providers"
 
@@ -63,6 +64,7 @@ final class AgentPanelModel: ObservableObject {
         let request = buildRequest(fileURL: fileURL, text: text)
         let invocation = invocationForProvider(provider, request: request)
         transcript = ""
+        proposedEdit = nil
         appendTranscript("→ \(provider.displayName)\n\n")
         isRunning = true
         statusText = "Running \(provider.displayName)"
@@ -124,6 +126,23 @@ final class AgentPanelModel: ObservableObject {
         process?.terminate()
     }
 
+    func diffPreview(currentText: String, fileURL: URL?) -> String? {
+        guard let proposedEdit else {
+            return nil
+        }
+
+        return AgentDiffPreview.unifiedPreview(
+            original: currentText,
+            replacement: proposedEdit.replacementText,
+            path: fileURL?.path ?? "Untitled"
+        )
+    }
+
+    func rejectProposedEdit() {
+        proposedEdit = nil
+        statusText = "Rejected proposed edit"
+    }
+
     private func buildRequest(fileURL: URL?, text: String) -> String {
         let path = fileURL?.path ?? "Untitled"
         let userPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,6 +154,9 @@ final class AgentPanelModel: ObservableObject {
         \(instruction)
 
         Current file: \(path)
+
+        If you propose a file edit, include the complete replacement text in a fenced block named `fast-editor-replacement`.
+        Do not modify files directly.
 
         ```text
         \(text)
@@ -181,6 +203,11 @@ final class AgentPanelModel: ObservableObject {
             statusText = exitCode == 0 ? "Completed" : "Exited with status \(exitCode)"
         } else {
             statusText = "Launch failed"
+        }
+
+        proposedEdit = AgentDiffPreview.extractProposedEdit(from: transcript)
+        if proposedEdit != nil {
+            statusText = "Proposed edit ready"
         }
     }
 }

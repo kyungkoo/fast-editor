@@ -78,6 +78,34 @@ struct AgentPanel: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+
+            if let diffPreview = model.diffPreview(currentText: editor.text, fileURL: editor.fileURL) {
+                Divider()
+
+                HStack {
+                    Button("Apply") {
+                        if let proposedEdit = model.proposedEdit {
+                            editor.applyAgentReplacement(proposedEdit.replacementText)
+                            model.rejectProposedEdit()
+                        }
+                    }
+
+                    Button("Reject") {
+                        model.rejectProposedEdit()
+                    }
+
+                    Spacer()
+                }
+
+                ScrollView {
+                    Text(diffPreview)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .background(Color(nsColor: .textBackgroundColor))
+            }
         }
         .padding(12)
     }
