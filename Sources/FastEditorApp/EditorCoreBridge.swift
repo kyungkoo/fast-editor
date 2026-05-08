@@ -6,6 +6,7 @@ import FastEditorTextEditing
 final class EditorCoreBridge: ObservableObject {
     @Published private(set) var workspaceURL: URL?
     @Published private(set) var fileURL: URL?
+    @Published private(set) var openBuffers: [EditorOpenBuffer] = []
     @Published private(set) var workspaceFileTree: [WorkspaceFileNode] = []
     @Published private(set) var statusText = "Open a file to start editing through the Rust core."
     @Published private(set) var isDirty = false
@@ -19,15 +20,33 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var taskDiagnostics: [TaskDiagnostic] = []
     @Published private(set) var taskStatusText = "No task selected"
     @Published private(set) var isTaskRunning = false
+    @Published private(set) var languageServerProviders: [LanguageServerProvider] = []
+    @Published private(set) var selectedLanguageServerID: LanguageServerID?
+    @Published private(set) var languageServerStatusText = "No language server detected"
+    @Published private(set) var isLanguageServerRunning = false
+    @Published private(set) var languageServerDiagnostics: [LanguageServerDiagnostic] = []
     @Published private(set) var selectedTextRange: Range<Int>?
+    @Published private(set) var findQuery = ""
+    @Published private(set) var findMatches: [TextSearchMatch] = []
+    @Published private(set) var activeFindMatchIndex: Int?
+    @Published private(set) var workspaceSearchQuery = ""
+    @Published private(set) var workspaceSearchResults: [WorkspaceSearchResult] = []
     @Published var text = ""
     @Published var errorMessage = ""
 
     private let session = EditorCoreSession()
     private var isSyncingFromCore = false
     private var runningTaskProcess: Process?
+    private var runningLanguageServerProcess: Process?
+    private var languageServerInput: FileHandle?
+    private var languageServerFramer = LanguageServerMessageFramer()
+    private var documentVersions: [UInt64: Int] = [:]
     private var taskStdout = ""
     private var taskStderr = ""
+
+    init() {
+        refreshLanguageServers()
+    }
 
     private var bufferID: UInt64 {
         session.currentBufferID
@@ -59,6 +78,63 @@ final class EditorCoreBridge: ObservableObject {
         AgentContext.currentFile(fileURL: fileURL, text: text, selectedRange: selectedTextRange)
     }
 
+    var findStatusText: String {
+        guard !findQuery.isEmpty else {
+            return "Find"
+        }
+
+        guard let activeFindMatchIndex else {
+            return "No matches"
+        }
+
+        return "\(activeFindMatchIndex + 1) of \(findMatches.count)"
+    }
+
+    var diagnosticLineIndexesForCurrentFile: Set<Int> {
+        guard let fileURL else {
+            return []
+        }
+
+        let taskLines = taskDiagnostics.compactMap { diagnostic -> Int? in
+            guard diagnostic.resolvedFileURL(workspaceURL: workspaceURL)?.standardizedFileURL == fileURL.standardizedFileURL else {
+                return nil
+            }
+
+            return diagnostic.targetLineIndex
+        }
+        let languageServerLines = languageServerDiagnostics.compactMap { diagnostic -> Int? in
+            guard diagnostic.fileURL.standardizedFileURL == fileURL.standardizedFileURL else {
+                return nil
+            }
+
+            return diagnostic.line
+        }
+
+        return Set(taskLines + languageServerLines)
+    }
+
+    var selectedLanguageServerProvider: LanguageServerProvider? {
+        guard let selectedLanguageServerID else {
+            return nil
+        }
+
+        return languageServerProviders.first { $0.id == selectedLanguageServerID }
+    }
+
+    var availableLanguageServerProviders: [LanguageServerProvider] {
+        languageServerProviders.filter(\.available)
+    }
+
+    var languageServerDiagnosticsForCurrentFile: [LanguageServerDiagnostic] {
+        guard let fileURL else {
+            return []
+        }
+
+        return languageServerDiagnostics.filter {
+            $0.fileURL.standardizedFileURL == fileURL.standardizedFileURL
+        }
+    }
+
     var errorPresented: Binding<Bool> {
         Binding(
             get: { !self.errorMessage.isEmpty },
@@ -72,6 +148,10 @@ final class EditorCoreBridge: ObservableObject {
 
     @discardableResult
     func open(url: URL) -> Bool {
+        if let buffer = session.buffer(forFileURL: url) {
+            return switchToBuffer(id: buffer.id)
+        }
+
         let openedID = url.path.withCString { path in
             feOpenFile(path)
         }
@@ -81,13 +161,12 @@ final class EditorCoreBridge: ObservableObject {
             return false
         }
 
-        session.replace(with: openedID)
-        fileURL = url
+        fileURL = url.standardizedFileURL
+        session.open(buffer: EditorOpenBuffer(id: openedID, fileURL: fileURL, isDirty: false))
+        documentVersions[openedID] = 1
         selectedTextRange = nil
-        syncTextFromCore()
-        syncRenderSnapshot()
-        syncMarkdownPreviewHTML()
-        syncDirtyState()
+        syncCurrentBufferState()
+        sendCurrentDocumentOpenToLanguageServer()
         focusRevision += 1
         statusText = "Opened \(url.path)"
         return true
@@ -97,6 +176,7 @@ final class EditorCoreBridge: ObservableObject {
         workspaceURL = url
         workspaceFileTree = WorkspaceFileNode.roots(in: url)
         syncProjectTaskSummary(for: url)
+        syncWorkspaceSearch()
         clearSelectedTask()
         statusText = "Opened folder \(url.path)"
     }
@@ -109,15 +189,57 @@ final class EditorCoreBridge: ObservableObject {
             return
         }
 
-        session.replace(with: newID)
         fileURL = nil
+        session.open(buffer: EditorOpenBuffer(id: newID, fileURL: nil, isDirty: false))
+        documentVersions[newID] = 1
         selectedTextRange = nil
-        syncTextFromCore()
-        syncRenderSnapshot()
-        syncMarkdownPreviewHTML()
-        syncDirtyState()
+        syncCurrentBufferState()
         focusRevision += 1
         statusText = "New untitled file"
+    }
+
+    @discardableResult
+    func switchToBuffer(id bufferID: UInt64) -> Bool {
+        guard session.switchToBuffer(id: bufferID) else {
+            return false
+        }
+
+        selectedTextRange = nil
+        syncPathFromCore()
+        syncCurrentBufferState()
+        sendCurrentDocumentOpenToLanguageServer()
+        focusRevision += 1
+        statusText = "Switched to \(displayPath)"
+        return true
+    }
+
+    func closeBuffer(id bufferID: UInt64, force: Bool = false) {
+        guard let buffer = session.buffer(for: bufferID) else {
+            return
+        }
+
+        if buffer.isDirty, !force {
+            statusText = "Save or discard changes before closing \(buffer.title)"
+            return
+        }
+
+        let wasCurrentBuffer = bufferID == self.bufferID
+        sendDocumentCloseToLanguageServer(fileURL: buffer.fileURL)
+        session.closeBuffer(id: bufferID)
+        documentVersions[bufferID] = nil
+        syncOpenBuffers()
+
+        if session.hasOpenBuffer {
+            if wasCurrentBuffer {
+                syncPathFromCore()
+                selectedTextRange = nil
+                syncCurrentBufferState()
+                focusRevision += 1
+            }
+        } else {
+            clearCurrentBufferState()
+            statusText = "No file open"
+        }
     }
 
     func save() -> Bool {
@@ -138,7 +260,10 @@ final class EditorCoreBridge: ObservableObject {
         syncRenderSnapshot()
         syncMarkdownPreviewHTML()
         syncDirtyState()
+        syncOpenBuffers()
         statusText = "Saved \(displayPath)"
+        sendCurrentDocumentSaveToLanguageServer()
+        syncWorkspaceSearch()
         return true
     }
 
@@ -162,7 +287,10 @@ final class EditorCoreBridge: ObservableObject {
         syncRenderSnapshot()
         syncMarkdownPreviewHTML()
         syncDirtyState()
+        syncOpenBuffers()
         statusText = "Saved \(displayPath)"
+        sendCurrentDocumentSaveToLanguageServer()
+        syncWorkspaceSearch()
         return true
     }
 
@@ -183,6 +311,9 @@ final class EditorCoreBridge: ObservableObject {
             syncRenderSnapshot()
             syncMarkdownPreviewHTML()
             syncDirtyState()
+            syncFindMatches()
+            syncOpenBuffers()
+            sendCurrentDocumentChangeToLanguageServer()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         }
     }
@@ -360,6 +491,136 @@ final class EditorCoreBridge: ObservableObject {
         taskStatusText = "Stopping task"
     }
 
+    func refreshLanguageServers() {
+        languageServerProviders = LanguageServerDetector.detect()
+        if selectedLanguageServerID == nil || selectedLanguageServerProvider?.available != true {
+            selectedLanguageServerID = availableLanguageServerProviders.first?.id
+        }
+        languageServerStatusText = availableLanguageServerProviders.isEmpty
+            ? "No language server detected"
+            : "Ready"
+    }
+
+    func selectLanguageServer(_ id: LanguageServerID?) {
+        guard !isLanguageServerRunning else {
+            return
+        }
+
+        selectedLanguageServerID = id
+    }
+
+    func startLanguageServer() {
+        guard !isLanguageServerRunning,
+              let provider = selectedLanguageServerProvider,
+              let executablePath = provider.executablePath
+        else {
+            languageServerStatusText = "No language server selected"
+            return
+        }
+
+        let process = Process()
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = provider.arguments
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        process.environment = ProcessInfo.processInfo.environment
+
+        languageServerInput = inputPipe.fileHandleForWriting
+        languageServerFramer = LanguageServerMessageFramer()
+        languageServerStatusText = "Starting \(provider.displayName)"
+        isLanguageServerRunning = true
+        runningLanguageServerProcess = process
+
+        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            Task { @MainActor in
+                self?.appendLanguageServerOutput(data)
+            }
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                return
+            }
+            Task { @MainActor in
+                self?.languageServerStatusText = String(decoding: data, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        process.terminationHandler = { [weak self, weak outputPipe, weak errorPipe] process in
+            outputPipe?.fileHandleForReading.readabilityHandler = nil
+            errorPipe?.fileHandleForReading.readabilityHandler = nil
+            Task { @MainActor in
+                self?.isLanguageServerRunning = false
+                self?.runningLanguageServerProcess = nil
+                self?.languageServerInput = nil
+                self?.languageServerStatusText = "Exited with \(process.terminationStatus)"
+            }
+        }
+
+        do {
+            try process.run()
+            languageServerStatusText = "Running \(provider.displayName)"
+            sendLanguageServerRequest(method: "initialize", id: 1, params: initializeParams())
+            sendLanguageServerNotification(method: "initialized", params: [:])
+            sendCurrentDocumentOpenToLanguageServer()
+        } catch {
+            isLanguageServerRunning = false
+            runningLanguageServerProcess = nil
+            languageServerInput = nil
+            languageServerStatusText = "Failed to start \(provider.displayName)"
+            errorMessage = "Language server failed: \(error.localizedDescription)"
+        }
+    }
+
+    func stopLanguageServer() {
+        guard isLanguageServerRunning else {
+            return
+        }
+
+        sendLanguageServerRequest(method: "shutdown", id: 2, params: [:])
+        sendLanguageServerNotification(method: "exit", params: [:])
+        runningLanguageServerProcess?.terminate()
+        languageServerStatusText = "Stopping language server"
+    }
+
+    func navigateToLanguageServerDiagnostic(_ diagnostic: LanguageServerDiagnostic) {
+        guard open(url: diagnostic.fileURL) else {
+            return
+        }
+
+        let cursorOffset = TextEditingPrimitives.utf8Offset(
+            in: text,
+            line: diagnostic.line,
+            column: diagnostic.column
+        )
+        setCursorUTF8Offset(cursorOffset)
+        focusRevision += 1
+        statusText = "Opened \(diagnostic.locationDisplay)"
+    }
+
+    func applyLanguageServerMessage(_ data: Data) {
+        let diagnostics = LanguageServerDiagnosticsParser.diagnostics(from: data)
+        guard !diagnostics.isEmpty || isPublishDiagnosticsMessage(data) else {
+            return
+        }
+
+        if let fileURL = diagnostics.first?.fileURL ?? publishDiagnosticsURL(data) {
+            languageServerDiagnostics.removeAll {
+                $0.fileURL.standardizedFileURL == fileURL.standardizedFileURL
+            }
+        }
+
+        languageServerDiagnostics.append(contentsOf: diagnostics)
+        languageServerStatusText = diagnostics.isEmpty
+            ? "No diagnostics"
+            : "\(diagnostics.count) diagnostics"
+    }
+
     func navigateToDiagnostic(_ diagnostic: TaskDiagnostic) {
         guard let url = diagnostic.resolvedFileURL(workspaceURL: workspaceURL) else {
             errorMessage = "Diagnostic navigation failed: no file path for \(diagnostic.locationDisplay)"
@@ -388,6 +649,65 @@ final class EditorCoreBridge: ObservableObject {
         }
     }
 
+    func updateFindQuery(_ query: String) {
+        findQuery = query
+        syncFindMatches()
+    }
+
+    func selectNextFindMatch() {
+        guard !findMatches.isEmpty else {
+            activeFindMatchIndex = nil
+            return
+        }
+
+        let nextIndex = activeFindMatchIndex.map { ($0 + 1) % findMatches.count } ?? 0
+        selectFindMatch(at: nextIndex)
+    }
+
+    func selectPreviousFindMatch() {
+        guard !findMatches.isEmpty else {
+            activeFindMatchIndex = nil
+            return
+        }
+
+        let nextIndex = activeFindMatchIndex.map { ($0 - 1 + findMatches.count) % findMatches.count }
+            ?? findMatches.count - 1
+        selectFindMatch(at: nextIndex)
+    }
+
+    func selectFindMatch(at index: Int) {
+        guard findMatches.indices.contains(index) else {
+            return
+        }
+
+        let match = findMatches[index]
+        activeFindMatchIndex = index
+        selectedTextRange = match.range
+        setCursorUTF8Offset(match.range.lowerBound)
+        focusRevision += 1
+        statusText = "Found \(findQuery) at \(match.displayLocation)"
+    }
+
+    func updateWorkspaceSearchQuery(_ query: String) {
+        workspaceSearchQuery = query
+        syncWorkspaceSearch()
+    }
+
+    func openWorkspaceSearchResult(_ result: WorkspaceSearchResult) {
+        guard open(url: result.fileURL) else {
+            return
+        }
+
+        let cursorOffset = TextEditingPrimitives.utf8Offset(
+            in: text,
+            line: result.line,
+            column: result.column
+        )
+        setCursorUTF8Offset(cursorOffset)
+        focusRevision += 1
+        statusText = "Opened \(result.displayLocation)"
+    }
+
     func isCurrentFile(_ node: WorkspaceFileNode) -> Bool {
         guard !node.isDirectory, let fileURL else {
             return false
@@ -414,6 +734,26 @@ final class EditorCoreBridge: ObservableObject {
         isSyncingFromCore = true
         text = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
         isSyncingFromCore = false
+    }
+
+    private func syncCurrentBufferState() {
+        syncTextFromCore()
+        syncRenderSnapshot()
+        syncMarkdownPreviewHTML()
+        syncDirtyState()
+        syncFindMatches()
+        syncOpenBuffers()
+    }
+
+    private func clearCurrentBufferState() {
+        fileURL = nil
+        selectedTextRange = nil
+        text = ""
+        renderSnapshot = .empty
+        markdownPreviewHTML = ""
+        isDirty = false
+        syncFindMatches()
+        syncOpenBuffers()
     }
 
     private func syncRenderSnapshot() {
@@ -574,6 +914,149 @@ final class EditorCoreBridge: ObservableObject {
         }
     }
 
+    private func appendLanguageServerOutput(_ data: Data) {
+        guard !data.isEmpty else {
+            return
+        }
+
+        for message in languageServerFramer.append(data) {
+            applyLanguageServerMessage(message)
+        }
+    }
+
+    private func sendCurrentDocumentOpenToLanguageServer() {
+        guard let fileURL,
+              let provider = selectedLanguageServerProvider,
+              provider.id.supportedExtensions.contains(fileURL.pathExtension),
+              isLanguageServerRunning
+        else {
+            return
+        }
+
+        let version = documentVersions[bufferID, default: 1]
+        let event = LanguageServerDocumentEvent.didOpen(
+            uri: fileURL.absoluteString,
+            languageID: languageID(for: fileURL),
+            version: version,
+            text: text
+        )
+        sendLanguageServerNotification(method: event.method, params: event.payload)
+    }
+
+    private func sendCurrentDocumentChangeToLanguageServer() {
+        guard let fileURL, isLanguageServerRunning else {
+            return
+        }
+
+        let version = (documentVersions[bufferID] ?? 1) + 1
+        documentVersions[bufferID] = version
+        let event = LanguageServerDocumentEvent.didChange(
+            uri: fileURL.absoluteString,
+            version: version,
+            text: text
+        )
+        sendLanguageServerNotification(method: event.method, params: event.payload)
+    }
+
+    private func sendCurrentDocumentSaveToLanguageServer() {
+        guard let fileURL, isLanguageServerRunning else {
+            return
+        }
+
+        let event = LanguageServerDocumentEvent.didSave(
+            uri: fileURL.absoluteString,
+            text: text
+        )
+        sendLanguageServerNotification(method: event.method, params: event.payload)
+    }
+
+    private func sendDocumentCloseToLanguageServer(fileURL: URL?) {
+        guard let fileURL, isLanguageServerRunning else {
+            return
+        }
+
+        let event = LanguageServerDocumentEvent.didClose(uri: fileURL.absoluteString)
+        sendLanguageServerNotification(method: event.method, params: event.payload)
+    }
+
+    private func sendLanguageServerRequest(method: String, id: Int, params: [String: Any]) {
+        sendLanguageServerObject([
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        ])
+    }
+
+    private func sendLanguageServerNotification(method: String, params: [String: Any]) {
+        sendLanguageServerObject([
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        ])
+    }
+
+    private func sendLanguageServerObject(_ object: [String: Any]) {
+        guard let input = languageServerInput,
+              let payload = try? JSONSerialization.data(withJSONObject: object)
+        else {
+            return
+        }
+
+        var message = Data("Content-Length: \(payload.count)\r\n\r\n".utf8)
+        message.append(payload)
+        input.write(message)
+    }
+
+    private func initializeParams() -> [String: Any] {
+        let rootURI: Any = workspaceURL.map(\.absoluteString) ?? NSNull()
+        return [
+            "processId": ProcessInfo.processInfo.processIdentifier,
+            "rootUri": rootURI,
+            "capabilities": [
+                "textDocument": [
+                    "synchronization": [
+                        "didSave": true,
+                    ],
+                    "publishDiagnostics": [:],
+                ],
+            ],
+        ]
+    }
+
+    private func languageID(for fileURL: URL) -> String {
+        switch fileURL.pathExtension {
+        case "swift":
+            "swift"
+        case "rs":
+            "rust"
+        case "kt", "kts":
+            "kotlin"
+        default:
+            "plaintext"
+        }
+    }
+
+    private func isPublishDiagnosticsMessage(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+
+        return object["method"] as? String == "textDocument/publishDiagnostics"
+    }
+
+    private func publishDiagnosticsURL(_ data: Data) -> URL? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let params = object["params"] as? [String: Any],
+              let uri = params["uri"] as? String,
+              let url = URL(string: uri)
+        else {
+            return nil
+        }
+
+        return url.standardizedFileURL
+    }
+
     private func replaceText(_ newText: String) {
         guard hasOpenBuffer, !isSyncingFromCore else {
             return
@@ -590,6 +1073,9 @@ final class EditorCoreBridge: ObservableObject {
             syncRenderSnapshot()
             syncMarkdownPreviewHTML()
             syncDirtyState()
+            syncFindMatches()
+            syncOpenBuffers()
+            sendCurrentDocumentChangeToLanguageServer()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         }
     }
@@ -605,6 +1091,9 @@ final class EditorCoreBridge: ObservableObject {
             syncRenderSnapshot()
             syncMarkdownPreviewHTML()
             syncDirtyState()
+            syncFindMatches()
+            syncOpenBuffers()
+            sendCurrentDocumentChangeToLanguageServer()
             statusText = isDirty ? "Unsaved changes in \(displayPath)" : "Saved \(displayPath)"
         } else if result == 0 {
             statusText = emptyMessage
@@ -624,7 +1113,37 @@ final class EditorCoreBridge: ObservableObject {
             reportLastError(prefix: "State read failed")
         } else {
             isDirty = result == 1
+            session.updateCurrentBuffer(fileURL: fileURL, isDirty: isDirty)
+            syncOpenBuffers()
         }
+    }
+
+    private func syncFindMatches() {
+        findMatches = TextSearch.matches(in: text, query: findQuery)
+
+        if findMatches.isEmpty {
+            activeFindMatchIndex = nil
+            selectedTextRange = nil
+        } else if let activeFindMatchIndex, findMatches.indices.contains(activeFindMatchIndex) {
+        } else {
+            activeFindMatchIndex = 0
+        }
+    }
+
+    private func syncWorkspaceSearch() {
+        guard let workspaceURL else {
+            workspaceSearchResults = []
+            return
+        }
+
+        workspaceSearchResults = WorkspaceTextSearch.search(
+            query: workspaceSearchQuery,
+            workspaceURL: workspaceURL
+        )
+    }
+
+    private func syncOpenBuffers() {
+        openBuffers = session.openBuffers
     }
 
     private func reportLastError(prefix: String) {

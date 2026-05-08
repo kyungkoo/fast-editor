@@ -14,6 +14,23 @@ struct WorkspaceFileNode: Identifiable, Equatable {
         children(in: workspaceURL)
     }
 
+    static func searchableFileURLs(in workspaceURL: URL) -> [URL] {
+        children(in: workspaceURL)
+            .flatMap(\.searchableFileURLs)
+    }
+
+    static func isIgnoredDirectoryName(_ name: String) -> Bool {
+        ignoredDirectoryNames.contains(name)
+    }
+
+    private var searchableFileURLs: [URL] {
+        if isDirectory {
+            return children?.flatMap(\.searchableFileURLs) ?? []
+        }
+
+        return [url]
+    }
+
     private static func node(for url: URL) -> WorkspaceFileNode? {
         let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
         let isDirectory = resourceValues?.isDirectory == true
@@ -23,7 +40,7 @@ struct WorkspaceFileNode: Identifiable, Equatable {
             return nil
         }
 
-        if isDirectory, ignoredDirectoryNames.contains(url.lastPathComponent) {
+        if isDirectory, isIgnoredDirectoryName(url.lastPathComponent) {
             return nil
         }
 
