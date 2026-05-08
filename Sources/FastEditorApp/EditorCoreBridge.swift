@@ -6,6 +6,7 @@ import FastEditorTextEditing
 final class EditorCoreBridge: ObservableObject {
     @Published private(set) var workspaceURL: URL?
     @Published private(set) var fileURL: URL?
+    @Published private(set) var workspaceFileTree: [WorkspaceFileNode] = []
     @Published private(set) var statusText = "Open a file to start editing through the Rust core."
     @Published private(set) var isDirty = false
     @Published private(set) var focusRevision = 0
@@ -88,6 +89,7 @@ final class EditorCoreBridge: ObservableObject {
 
     func openFolder(url: URL) {
         workspaceURL = url
+        workspaceFileTree = WorkspaceFileNode.roots(in: url)
         syncProjectTaskSummary(for: url)
         clearSelectedTask()
         statusText = "Opened folder \(url.path)"
@@ -350,6 +352,14 @@ final class EditorCoreBridge: ObservableObject {
             focusRevision += 1
             statusText = "Opened \(url.path):\(line + 1):\(column + 1)"
         }
+    }
+
+    func isCurrentFile(_ node: WorkspaceFileNode) -> Bool {
+        guard !node.isDirectory, let fileURL else {
+            return false
+        }
+
+        return fileURL.standardizedFileURL == node.url.standardizedFileURL
     }
 
     private func syncTextFromCore() {

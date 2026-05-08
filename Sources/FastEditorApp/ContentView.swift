@@ -136,15 +136,13 @@ struct ContentView: View {
                 Label(editor.workspaceURL?.lastPathComponent ?? "No folder open", systemImage: "folder")
                     .lineLimit(1)
                     .truncationMode(.middle)
-
-                Label(editor.fileURL?.lastPathComponent ?? "No file open", systemImage: "doc.text")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
             .font(.callout)
             .padding(12)
 
             if editor.workspaceURL != nil {
+                Divider()
+                fileTreeSection
                 Divider()
                 taskSection
             }
@@ -152,6 +150,52 @@ struct ContentView: View {
             Spacer()
         }
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var fileTreeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Files")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if editor.workspaceFileTree.isEmpty {
+                Label("No files", systemImage: "folder")
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    OutlineGroup(editor.workspaceFileTree, children: \.children) { node in
+                        fileTreeRow(node)
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+        .font(.callout)
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private func fileTreeRow(_ node: WorkspaceFileNode) -> some View {
+        if node.isDirectory {
+            Label(node.name, systemImage: "folder")
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else {
+            Button {
+                editor.open(url: node.url)
+            } label: {
+                Label(node.name, systemImage: "doc.text")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 4)
+                    .background(editor.isCurrentFile(node) ? Color.accentColor.opacity(0.15) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .buttonStyle(.plain)
+            .help(node.url.path)
+        }
     }
 
     private var taskSection: some View {
