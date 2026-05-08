@@ -59,14 +59,19 @@ final class EditorCoreBridge: ObservableObject {
     private var quickOpenCandidates: [QuickOpenCandidate] = []
     private var workspaceSearchTask: Task<Void, Never>?
     private var referenceSearchTask: Task<Void, Never>?
+    private var sessionPersistenceTask: Task<Void, Never>?
+    private let sessionRestorationStore = EditorSessionRestorationStore()
+    private var isRestoringSession = false
 
     init() {
         refreshLanguageServers()
+        restoreEditorSession()
     }
 
     deinit {
         workspaceSearchTask?.cancel()
         referenceSearchTask?.cancel()
+        sessionPersistenceTask?.cancel()
     }
 
     private var bufferID: UInt64 {
@@ -237,6 +242,7 @@ final class EditorCoreBridge: ObservableObject {
         navigationHistory.replaceCurrent(currentNavigationLocation())
         focusRevision += 1
         statusText = "Opened \(url.path)"
+        scheduleSessionStatePersistence()
         return true
     }
 
@@ -248,6 +254,7 @@ final class EditorCoreBridge: ObservableObject {
         syncWorkspaceSearch()
         clearSelectedTask()
         statusText = "Opened folder \(url.path)"
+        scheduleSessionStatePersistence()
     }
 
     func newFile() {
@@ -266,6 +273,7 @@ final class EditorCoreBridge: ObservableObject {
         navigationHistory.replaceCurrent(nil)
         focusRevision += 1
         statusText = "New untitled file"
+        scheduleSessionStatePersistence()
     }
 
     @discardableResult
@@ -285,6 +293,7 @@ final class EditorCoreBridge: ObservableObject {
         navigationHistory.replaceCurrent(currentNavigationLocation())
         focusRevision += 1
         statusText = "Switched to \(displayPath)"
+        scheduleSessionStatePersistence()
         return true
     }
 
@@ -322,6 +331,7 @@ final class EditorCoreBridge: ObservableObject {
             navigationHistory.replaceCurrent(nil)
             statusText = "No file open"
         }
+        scheduleSessionStatePersistence()
     }
 
     func save() -> Bool {
@@ -349,6 +359,7 @@ final class EditorCoreBridge: ObservableObject {
             recordRecentFile(fileURL)
         }
         syncWorkspaceSearch()
+        scheduleSessionStatePersistence()
         return true
     }
 
@@ -378,6 +389,7 @@ final class EditorCoreBridge: ObservableObject {
         statusText = "Saved \(displayPath)"
         sendCurrentDocumentSaveToLanguageServer()
         syncWorkspaceSearch()
+        scheduleSessionStatePersistence()
         return true
     }
 
@@ -417,6 +429,7 @@ final class EditorCoreBridge: ObservableObject {
 
         syncRenderSnapshot()
         navigationHistory.replaceCurrent(currentNavigationLocation())
+        scheduleSessionStatePersistence()
     }
 
     func setSelectionUTF8Range(_ range: Range<Int>?) {
@@ -424,6 +437,7 @@ final class EditorCoreBridge: ObservableObject {
         if hasOpenBuffer {
             selectedTextRanges[bufferID] = range
         }
+        scheduleSessionStatePersistence()
     }
 
     func setScrollPosition(_ position: EditorScrollPosition) {
@@ -432,6 +446,7 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         scrollPositions[bufferID] = position
+        scheduleSessionStatePersistence()
     }
 
     func undo() {
@@ -1461,6 +1476,7 @@ final class EditorCoreBridge: ObservableObject {
             recentFileURLs.removeLast(recentFileURLs.count - 40)
         }
         syncQuickOpenResults()
+        scheduleSessionStatePersistence()
     }
 
     private func captureCurrentViewState() {
@@ -1508,6 +1524,139 @@ final class EditorCoreBridge: ObservableObject {
         focusRevision += 1
         navigationHistory.replaceCurrent(location)
         statusText = "Opened \(location.displayLocation)"
+    }
+
+    private func restoreEditorSession() {
+        guard let state = sessionRestorationStore.load() else {
+            return
+        }
+
+        isRestoringSession = true
+        defer {
+            isRestoringSession = false
+            syncOpenBuffers()
+            refreshQuickOpenCandidates()
+            navigationHistory.replaceCurrent(currentNavigationLocation())
+            scheduleSessionStatePersistence()
+        }
+
+        let fileManager = FileManager.default
+        if let workspacePath = state.workspacePath,
+           fileManager.fileExists(atPath: workspacePath) {
+            openFolder(url: URL(fileURLWithPath: workspacePath))
+        }
+
+        let statesByPath = Dictionary(uniqueKeysWithValues: state.openFiles.map { ($0.path, $0) })
+        for fileState in state.openFiles where fileManager.isReadableFile(atPath: fileState.path) {
+            let url = URL(fileURLWithPath: fileState.path)
+            guard open(url: url) else {
+                continue
+            }
+
+            restore(fileState, toCurrentBufferWith: url)
+        }
+
+        if let currentFilePath = state.currentFilePath,
+           fileManager.isReadableFile(atPath: currentFilePath) {
+            let currentURL = URL(fileURLWithPath: currentFilePath)
+            if open(url: currentURL),
+               let fileState = statesByPath[currentFilePath] {
+                restore(fileState, toCurrentBufferWith: currentURL)
+            }
+        }
+
+        recentFileURLs = state.recentFilePaths
+            .map { URL(fileURLWithPath: $0).standardizedFileURL }
+            .filter { fileManager.isReadableFile(atPath: $0.path) }
+
+        statusText = hasOpenBuffer
+            ? "Restored \(openBuffers.count) files"
+            : "Open a file to start editing through the Rust core."
+    }
+
+    private func restore(_ fileState: EditorSessionFileState, toCurrentBufferWith url: URL) {
+        guard hasOpenBuffer, fileURL?.standardizedFileURL == url.standardizedFileURL else {
+            return
+        }
+
+        let cursorOffset = TextEditingPrimitives.utf8Offset(
+            in: text,
+            line: fileState.line,
+            column: fileState.column
+        )
+        _ = feSetCursorOffset(bufferID, cursorOffset)
+        selectedTextRange = fileState.selectedUTF8Range
+        selectedTextRanges[bufferID] = fileState.selectedUTF8Range
+        scrollPositions[bufferID] = fileState.scrollPosition
+        syncRenderSnapshot()
+    }
+
+    private func scheduleSessionStatePersistence() {
+        guard !isRestoringSession else {
+            return
+        }
+
+        sessionPersistenceTask?.cancel()
+        sessionPersistenceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.persistEditorSessionState()
+        }
+    }
+
+    private func persistEditorSessionState() {
+        guard !isRestoringSession else {
+            return
+        }
+
+        captureCurrentViewState()
+
+        let fileStates = openBuffers.compactMap { buffer -> EditorSessionFileState? in
+            guard let fileURL = buffer.fileURL?.standardizedFileURL else {
+                return nil
+            }
+
+            let snapshot = renderSnapshot(for: buffer.id)
+            let scrollPosition = scrollPositions[buffer.id] ?? .zero
+            let selectedRange = selectedTextRanges[buffer.id]
+
+            return EditorSessionFileState(
+                path: fileURL.path,
+                line: snapshot?.cursorLine ?? 0,
+                column: snapshot?.cursorColumn ?? 0,
+                scrollX: scrollPosition.x,
+                scrollY: scrollPosition.y,
+                selectionLowerUTF8Offset: selectedRange?.lowerBound,
+                selectionUpperUTF8Offset: selectedRange?.upperBound
+            )
+        }
+
+        let state = EditorSessionRestorationState(
+            workspacePath: workspaceURL?.standardizedFileURL.path,
+            currentFilePath: fileURL?.standardizedFileURL.path,
+            openFiles: fileStates,
+            recentFilePaths: recentFileURLs.map { $0.standardizedFileURL.path }
+        )
+        sessionRestorationStore.save(state)
+    }
+
+    private func renderSnapshot(for bufferID: UInt64) -> EditorRenderSnapshot? {
+        let value = feGetRenderSnapshot(bufferID)
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(
+            EditorRenderSnapshot.self,
+            from: Data(bytes: pointer, count: value.len)
+        )
     }
 
     private func syncOpenBuffers() {

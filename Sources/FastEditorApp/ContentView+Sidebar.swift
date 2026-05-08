@@ -1,8 +1,71 @@
 import FastEditorModels
 import SwiftUI
 
+enum ProjectSidebarMode: String, CaseIterable {
+    case files
+    case search
+    case references
+    case project
+
+    var title: String {
+        switch self {
+        case .files:
+            "Files"
+        case .search:
+            "Search"
+        case .references:
+            "References"
+        case .project:
+            "Project"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .files:
+            "folder"
+        case .search:
+            "magnifyingglass"
+        case .references:
+            "scope"
+        case .project:
+            "wrench.and.screwdriver"
+        }
+    }
+}
+
 extension ContentView {
     var sidebar: some View {
+        HStack(spacing: 0) {
+            sidebarModeRail
+            Divider()
+            sidebarPanel
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    var sidebarModeRail: some View {
+        VStack(spacing: 6) {
+            ForEach(ProjectSidebarMode.allCases, id: \.self) { mode in
+                Button {
+                    sidebarMode = mode
+                } label: {
+                    Image(systemName: mode.systemImage)
+                        .frame(width: 28, height: 28)
+                        .background(sidebarMode == mode ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help(mode.title)
+            }
+
+            Spacer()
+        }
+        .padding(.top, 10)
+        .frame(width: 40)
+    }
+
+    var sidebarPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Workspace")
                 .font(.caption)
@@ -23,20 +86,25 @@ extension ContentView {
 
             if editor.workspaceURL != nil {
                 Divider()
-                workspaceSearchSection
-                Divider()
-                referencesSection
-                Divider()
-                fileTreeSection
-                Divider()
-                languageServerSection
-                Divider()
-                taskSection
+                activeSidebarSection
             }
 
             Spacer()
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    @ViewBuilder
+    var activeSidebarSection: some View {
+        switch sidebarMode {
+        case .files:
+            fileTreeSection
+        case .search:
+            workspaceSearchSection
+        case .references:
+            referencesSection
+        case .project:
+            projectToolsSection
+        }
     }
 
     var fileTreeSection: some View {
@@ -54,7 +122,6 @@ extension ContentView {
                         fileTreeRow(node)
                     }
                 }
-                .frame(maxHeight: 260)
             }
         }
         .font(.callout)
@@ -145,7 +212,6 @@ extension ContentView {
                             }
                         }
                     }
-                    .frame(maxHeight: 180)
                 }
             }
         }
@@ -198,11 +264,20 @@ extension ContentView {
                         }
                     }
                 }
-                .frame(maxHeight: 160)
             }
         }
         .font(.callout)
         .padding(12)
+    }
+
+    var projectToolsSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                languageServerSection
+                Divider()
+                taskSection
+            }
+        }
     }
 
     @ViewBuilder

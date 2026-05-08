@@ -48,10 +48,15 @@ struct FastEditorApp: App {
             }
 
             CommandGroup(replacing: .textEditing) {
-                Button("Find") {
+                Button("Find in File") {
                     AppCommand.post(AppCommand.find)
                 }
                 .keyboardShortcut("f")
+
+                Button("Workspace Search") {
+                    AppCommand.post(AppCommand.workspaceSearch)
+                }
+                .keyboardShortcut("F", modifiers: [.command, .shift])
 
                 Button("Quick Open") {
                     AppCommand.post(AppCommand.quickOpen)

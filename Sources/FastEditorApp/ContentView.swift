@@ -9,6 +9,7 @@ struct ContentView: View {
     @State var showsFindBar = true
     @State var showsQuickOpenPanel = false
     @State var showsGoToLinePanel = false
+    @State var sidebarMode: ProjectSidebarMode = .files
     @State var goToLineInput = ""
 
     var body: some View {
@@ -30,6 +31,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.openFolder)) { _ in
             openFolder()
+            sidebarMode = .files
         }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.save)) { _ in
             saveFile()
@@ -43,6 +45,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.find)) { _ in
             showsFindBar = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.workspaceSearch)) { _ in
+            sidebarMode = .search
+        }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.quickOpen)) { _ in
             editor.updateQuickOpenQuery("")
             showsQuickOpenPanel = true
@@ -52,6 +57,7 @@ struct ContentView: View {
             showsGoToLinePanel = true
         }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.findReferences)) { _ in
+            sidebarMode = .references
             editor.findReferencesForCurrentQuery()
         }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.navigateBack)) { _ in
