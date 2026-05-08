@@ -8,10 +8,32 @@ struct FastEditorApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 1040, minHeight: 620)
         }
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("New File") {
+                    AppCommand.post(AppCommand.newFile)
+                }
+                .keyboardShortcut("n")
+
+                Button("Open File...") {
+                    AppCommand.post(AppCommand.openFile)
+                }
+                .keyboardShortcut("o")
+
+                Button("Open Folder...") {
+                    AppCommand.post(AppCommand.openFolder)
+                }
+                .keyboardShortcut("O", modifiers: [.command, .shift])
+            }
+
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    AppCommand.post(AppCommand.save)
+                }
+                .keyboardShortcut("s")
+            }
         }
     }
 }

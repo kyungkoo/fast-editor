@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class EditorCoreBridge: ObservableObject {
+    @Published private(set) var workspaceURL: URL?
     @Published private(set) var fileURL: URL?
     @Published private(set) var statusText = "Open a file to start editing through the Rust core."
     @Published private(set) var isDirty = false
@@ -70,6 +71,11 @@ final class EditorCoreBridge: ObservableObject {
         syncDirtyState()
         focusRevision += 1
         statusText = "Opened \(url.path)"
+    }
+
+    func openFolder(url: URL) {
+        workspaceURL = url
+        statusText = "Opened folder \(url.path)"
     }
 
     func newFile() {

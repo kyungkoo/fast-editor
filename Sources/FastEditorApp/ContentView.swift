@@ -5,17 +5,45 @@ struct ContentView: View {
     @StateObject private var editor = EditorCoreBridge()
     @State private var renderMode = EditorRenderMode.appKit
     @State private var showsMarkdownPreview = false
+    @State private var showsAgentPanel = true
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            editorSurface
+            workspaceSurface
         }
         .alert("Editor Core Error", isPresented: editor.errorPresented) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(editor.errorMessage)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.newFile)) { _ in
+            editor.newFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.openFile)) { _ in
+            openFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.openFolder)) { _ in
+            openFolder()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.save)) { _ in
+            saveFile()
+        }
+    }
+
+    private var workspaceSurface: some View {
+        HSplitView {
+            sidebar
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
+
+            editorSurface
+                .frame(minWidth: 420)
+
+            if showsAgentPanel {
+                agentPanel
+                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+            }
         }
     }
 
@@ -68,6 +96,11 @@ struct ContentView: View {
             }
             .keyboardShortcut("o")
 
+            Button("Open Folder...") {
+                openFolder()
+            }
+            .keyboardShortcut("O", modifiers: [.command, .shift])
+
             Button("Save") {
                 saveFile()
             }
@@ -98,9 +131,68 @@ struct ContentView: View {
             Toggle("Preview", isOn: $showsMarkdownPreview)
                 .toggleStyle(.switch)
                 .disabled(!editor.hasOpenBuffer)
+
+            Toggle("Agent", isOn: $showsAgentPanel)
+                .toggleStyle(.switch)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Workspace")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label(editor.workspaceURL?.lastPathComponent ?? "No folder open", systemImage: "folder")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Label(editor.fileURL?.lastPathComponent ?? "No file open", systemImage: "doc.text")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.callout)
+            .padding(12)
+
+            Spacer()
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private var agentPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Agent Panel")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("No session", systemImage: "sparkles")
+                Label("Idle", systemImage: "doc.text")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(12)
+
+            Spacer()
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func openFile() {
@@ -111,6 +203,17 @@ struct ContentView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             editor.open(url: url)
+        }
+    }
+
+    private func openFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            editor.openFolder(url: url)
         }
     }
 
