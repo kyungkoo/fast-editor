@@ -14,6 +14,7 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var selectedTask: ProjectTaskDefinition?
     @Published private(set) var selectedTaskPlan: TaskExecutionPlan?
     @Published private(set) var taskOutput = ""
+    @Published private(set) var taskDiagnostics: [TaskDiagnostic] = []
     @Published private(set) var taskStatusText = "No task selected"
     @Published private(set) var isTaskRunning = false
     @Published var text = ""
@@ -22,6 +23,8 @@ final class EditorCoreBridge: ObservableObject {
     private let session = EditorCoreSession()
     private var isSyncingFromCore = false
     private var runningTaskProcess: Process?
+    private var taskStdout = ""
+    private var taskStderr = ""
 
     private var bufferID: UInt64 {
         session.currentBufferID
@@ -232,6 +235,9 @@ final class EditorCoreBridge: ObservableObject {
             selectedTask = task
             selectedTaskPlan = try JSONDecoder().decode(TaskExecutionPlan.self, from: data)
             taskOutput = ""
+            taskDiagnostics = []
+            taskStdout = ""
+            taskStderr = ""
             taskStatusText = "Ready to run \(task.label)"
         } catch {
             selectedTask = nil
@@ -268,6 +274,9 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         taskOutput = "$ \(plan.commandDisplay)\n"
+        taskDiagnostics = []
+        taskStdout = ""
+        taskStderr = ""
         taskStatusText = "Running \(selectedTask?.label ?? plan.taskID)"
         isTaskRunning = true
         runningTaskProcess = process
@@ -275,13 +284,13 @@ final class EditorCoreBridge: ObservableObject {
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             Task { @MainActor in
-                self?.appendTaskOutput(data)
+                self?.appendTaskOutput(data, stream: .standardOutput)
             }
         }
         errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             Task { @MainActor in
-                self?.appendTaskOutput(data)
+                self?.appendTaskOutput(data, stream: .standardError)
             }
         }
         process.terminationHandler = { [weak self, weak outputPipe, weak errorPipe] process in
@@ -292,6 +301,7 @@ final class EditorCoreBridge: ObservableObject {
                 self?.runningTaskProcess = nil
                 self?.taskStatusText = "Exited with \(process.terminationStatus)"
                 self?.taskOutput += "\n[exited \(process.terminationStatus)]\n"
+                self?.syncTaskDiagnostics(exitCode: process.terminationStatus)
             }
         }
 
@@ -302,6 +312,7 @@ final class EditorCoreBridge: ObservableObject {
             runningTaskProcess = nil
             taskStatusText = "Task failed to start"
             taskOutput += "Failed to start: \(error.localizedDescription)\n"
+            taskDiagnostics = []
         }
     }
 
@@ -424,19 +435,67 @@ final class EditorCoreBridge: ObservableObject {
         selectedTask = nil
         selectedTaskPlan = nil
         taskOutput = ""
+        taskDiagnostics = []
         taskStatusText = "No task selected"
         isTaskRunning = false
         runningTaskProcess = nil
+        taskStdout = ""
+        taskStderr = ""
     }
 
-    private func appendTaskOutput(_ data: Data) {
+    private func appendTaskOutput(_ data: Data, stream: TaskOutputStream) {
         guard !data.isEmpty else {
             return
         }
 
         let text = String(decoding: data, as: UTF8.self)
-        Task { @MainActor in
-            self.taskOutput += text
+        switch stream {
+        case .standardOutput:
+            taskStdout += text
+        case .standardError:
+            taskStderr += text
+        }
+        taskOutput += text
+    }
+
+    private func syncTaskDiagnostics(exitCode: Int32) {
+        guard let providerID = selectedTask?.providerID else {
+            taskDiagnostics = []
+            return
+        }
+
+        let stdoutBytes = Array(taskStdout.utf8)
+        let stderrBytes = Array(taskStderr.utf8)
+        let value = providerID.rawValue.withCString { providerID in
+            stdoutBytes.withUnsafeBufferPointer { stdout in
+                stderrBytes.withUnsafeBufferPointer { stderr in
+                    feParseTaskDiagnostics(
+                        providerID,
+                        stdout.baseAddress,
+                        stdout.count,
+                        stderr.baseAddress,
+                        stderr.count,
+                        exitCode
+                    )
+                }
+            }
+        }
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr else {
+            taskDiagnostics = []
+            reportLastError(prefix: "Diagnostic parsing failed")
+            return
+        }
+
+        let data = Data(bytes: pointer, count: value.len)
+        do {
+            taskDiagnostics = try JSONDecoder().decode([TaskDiagnostic].self, from: data)
+        } catch {
+            taskDiagnostics = []
+            errorMessage = "Diagnostic parsing failed: \(error.localizedDescription)"
         }
     }
 
@@ -512,4 +571,9 @@ final class EditorCoreBridge: ObservableObject {
     private var displayPath: String {
         fileURL?.path ?? "Untitled"
     }
+}
+
+private enum TaskOutputStream {
+    case standardOutput
+    case standardError
 }

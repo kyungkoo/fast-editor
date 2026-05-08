@@ -39,6 +39,16 @@ func feGetProjectTaskExecutionPlan(
     _ taskID: UnsafePointer<CChar>
 ) -> FeString
 
+@_silgen_name("fe_parse_task_diagnostics")
+func feParseTaskDiagnostics(
+    _ providerID: UnsafePointer<CChar>,
+    _ stdout: UnsafePointer<UInt8>?,
+    _ stdoutLength: Int,
+    _ stderr: UnsafePointer<UInt8>?,
+    _ stderrLength: Int,
+    _ exitCode: Int32
+) -> FeString
+
 @_silgen_name("fe_replace_text")
 func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
 

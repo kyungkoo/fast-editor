@@ -233,6 +233,33 @@ struct ContentView: View {
                 .frame(maxHeight: 180)
                 .background(Color(nsColor: .textBackgroundColor))
             }
+
+            if !editor.taskDiagnostics.isEmpty {
+                Divider()
+                diagnosticsList
+            }
+        }
+    }
+
+    private var diagnosticsList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Diagnostics")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(editor.taskDiagnostics) { diagnostic in
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(diagnostic.locationDisplay, systemImage: diagnosticIcon(for: diagnostic.severity))
+                        .foregroundStyle(diagnosticColor(for: diagnostic.severity))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Text(diagnostic.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
         }
     }
 
@@ -248,6 +275,28 @@ struct ContentView: View {
             "terminal"
         case .other:
             "gearshape"
+        }
+    }
+
+    private func diagnosticIcon(for severity: TaskDiagnosticSeverity) -> String {
+        switch severity {
+        case .error:
+            "xmark.octagon"
+        case .warning:
+            "exclamationmark.triangle"
+        case .note:
+            "info.circle"
+        }
+    }
+
+    private func diagnosticColor(for severity: TaskDiagnosticSeverity) -> Color {
+        switch severity {
+        case .error:
+            .red
+        case .warning:
+            .orange
+        case .note:
+            .secondary
         }
     }
 

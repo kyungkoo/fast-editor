@@ -7,7 +7,7 @@ use std::ptr;
 use std::sync::{Mutex, OnceLock};
 use task_core::{
     builtin_task_providers, AndroidEnvironmentInspection, AndroidProjectDescription,
-    AndroidProvider, ProjectDetection, TaskDefinition, TaskProviderId,
+    AndroidProvider, ProjectDetection, TaskDefinition, TaskOutput, TaskProviderId,
 };
 
 #[derive(serde::Serialize)]
@@ -308,6 +308,50 @@ pub extern "C" fn fe_get_project_task_execution_plan(
 }
 
 #[no_mangle]
+pub extern "C" fn fe_parse_task_diagnostics(
+    provider_id: *const c_char,
+    stdout_ptr: *const u8,
+    stdout_len: usize,
+    stderr_ptr: *const u8,
+    stderr_len: usize,
+    exit_code: i32,
+) -> FeString {
+    let result = task_provider_id_from_c(provider_id)
+        .and_then(|provider_id| {
+            let stdout = string_from_bytes(stdout_ptr, stdout_len)?;
+            let stderr = string_from_bytes(stderr_ptr, stderr_len)?;
+            Ok((provider_id, stdout, stderr))
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|(provider_id, stdout, stderr)| {
+            let registry = builtin_task_providers();
+            let diagnostics = registry
+                .parse_diagnostics(
+                    &provider_id,
+                    &TaskOutput {
+                        stdout,
+                        stderr,
+                        exit_code: Some(exit_code),
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+
+            serde_json::to_string(&diagnostics).map_err(|error| error.to_string())
+        });
+
+    match result {
+        Ok(diagnostics) => {
+            clear_last_error();
+            FeString::from_string(diagnostics)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_replace_text(buffer_id: BufferId, text_ptr: *const u8, len: usize) -> i32 {
     replace_text(buffer_id, text_ptr, len, None)
 }
@@ -427,6 +471,22 @@ fn string_from_c(value: *const c_char) -> Result<String, EditorError> {
     let value = unsafe { CStr::from_ptr(value) };
     value
         .to_str()
+        .map(ToOwned::to_owned)
+        .map_err(|_| EditorError::InvalidUtf8)
+}
+
+fn string_from_bytes(value: *const u8, len: usize) -> Result<String, EditorError> {
+    if value.is_null() && len != 0 {
+        return Err(EditorError::InvalidUtf8);
+    }
+
+    let bytes = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value, len) }
+    };
+
+    std::str::from_utf8(bytes)
         .map(ToOwned::to_owned)
         .map_err(|_| EditorError::InvalidUtf8)
 }

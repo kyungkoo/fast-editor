@@ -62,6 +62,40 @@ struct TaskExecutionPlan: Decodable, Equatable {
     }
 }
 
+struct TaskDiagnostic: Decodable, Equatable, Identifiable {
+    var severity: TaskDiagnosticSeverity
+    var message: String
+    var file: String?
+    var line: Int?
+    var column: Int?
+
+    var id: String {
+        "\(severity.rawValue):\(file ?? ""):\(line ?? 0):\(column ?? 0):\(message)"
+    }
+
+    var locationDisplay: String {
+        guard let file else {
+            return "Task output"
+        }
+
+        if let line, let column {
+            return "\(file):\(line):\(column)"
+        }
+
+        if let line {
+            return "\(file):\(line)"
+        }
+
+        return file
+    }
+}
+
+enum TaskDiagnosticSeverity: String, Decodable, Equatable {
+    case error
+    case warning
+    case note
+}
+
 enum TaskProviderID: String, Decodable, Equatable {
     case android
     case swiftPackage = "swift_package"

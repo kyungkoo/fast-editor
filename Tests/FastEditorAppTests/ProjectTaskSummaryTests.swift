@@ -73,4 +73,24 @@ struct ProjectTaskSummaryTests {
         #expect(plan.args == ["test"])
         #expect(plan.commandDisplay == "swift test")
     }
+
+    @Test func decodesTaskDiagnosticPayload() throws {
+        let payload = """
+        [
+          {
+            "severity": "error",
+            "message": "cannot find value",
+            "file": "Sources/App.swift",
+            "line": 12,
+            "column": 4
+          }
+        ]
+        """.data(using: .utf8)!
+
+        let diagnostics = try JSONDecoder().decode([TaskDiagnostic].self, from: payload)
+
+        #expect(diagnostics[0].severity == .error)
+        #expect(diagnostics[0].locationDisplay == "Sources/App.swift:12:4")
+        #expect(diagnostics[0].message == "cannot find value")
+    }
 }

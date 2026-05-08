@@ -821,6 +821,29 @@ fn ffi_get_project_task_execution_plan_returns_command_payload() {
 }
 
 #[test]
+fn ffi_parse_task_diagnostics_returns_structured_payload() {
+    let _guard = ffi_test_lock();
+    let provider_id = CString::new("swift_package").expect("provider id");
+    let stdout = "Sources/App.swift:12:4: error: cannot find value\n";
+    let stderr = "warning: build setting ignored\n";
+
+    let diagnostics = take_ffi_string(fe_parse_task_diagnostics(
+        provider_id.as_ptr(),
+        stdout.as_ptr(),
+        stdout.len(),
+        stderr.as_ptr(),
+        stderr.len(),
+        1,
+    ));
+
+    assert!(diagnostics.contains("\"severity\":\"warning\""));
+    assert!(diagnostics.contains("\"severity\":\"error\""));
+    assert!(diagnostics.contains("\"file\":\"Sources/App.swift\""));
+    assert!(diagnostics.contains("\"line\":12"));
+    assert!(diagnostics.contains("\"column\":4"));
+}
+
+#[test]
 fn ffi_render_snapshot_includes_tree_sitter_language_and_span_payload() {
     let _guard = ffi_test_lock();
     let cases = [
