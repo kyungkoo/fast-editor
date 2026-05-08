@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var editor = EditorCoreBridge()
-    @State private var renderMode = EditorRenderMode.appKit
     @State private var showsMarkdownPreview = false
     @State private var showsAgentPanel = true
 
@@ -63,25 +62,16 @@ struct ContentView: View {
 
     @ViewBuilder
     private var editorPane: some View {
-        switch renderMode {
-        case .appKit:
-            AppKitTextEditor(
-                text: editor.textBinding,
-                isEditable: editor.hasOpenBuffer,
-                focusRevision: editor.focusRevision
-            )
-        case .metal:
-            MetalTextEditor(
-                text: editor.textBinding,
-                snapshot: editor.renderSnapshot,
-                isEditable: editor.hasOpenBuffer,
-                focusRevision: editor.focusRevision,
-                onTextChange: editor.replaceText,
-                onCursorMove: editor.setCursorUTF8Offset,
-                onUndo: editor.undo,
-                onRedo: editor.redo
-            )
-        }
+        MetalTextEditor(
+            text: editor.textBinding,
+            snapshot: editor.renderSnapshot,
+            isEditable: editor.hasOpenBuffer,
+            focusRevision: editor.focusRevision,
+            onTextChange: editor.replaceText,
+            onCursorMove: editor.setCursorUTF8Offset,
+            onUndo: editor.undo,
+            onRedo: editor.redo
+        )
     }
 
     private var toolbar: some View {
@@ -119,14 +109,6 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             Spacer()
-
-            Picker("Renderer", selection: $renderMode) {
-                ForEach(EditorRenderMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 170)
 
             Toggle("Preview", isOn: $showsMarkdownPreview)
                 .toggleStyle(.switch)
@@ -200,24 +182,6 @@ struct ContentView: View {
             }
         } else {
             _ = editor.save()
-        }
-    }
-}
-
-private enum EditorRenderMode: String, CaseIterable, Identifiable {
-    case appKit
-    case metal
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .appKit:
-            "AppKit"
-        case .metal:
-            "Metal"
         }
     }
 }
