@@ -32,6 +32,16 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var activeFindMatchIndex: Int?
     @Published private(set) var workspaceSearchQuery = ""
     @Published private(set) var workspaceSearchResults: [WorkspaceSearchResult] = []
+    @Published private(set) var isWorkspaceSearchRunning = false
+    @Published private(set) var activeWorkspaceSearchResultIndex: Int?
+    @Published private(set) var quickOpenQuery = ""
+    @Published private(set) var quickOpenResults: [QuickOpenResult] = []
+    @Published private(set) var referenceQuery = ""
+    @Published private(set) var referenceResults: [WorkspaceReferenceResult] = []
+    @Published private(set) var isReferenceSearchRunning = false
+    @Published private(set) var navigationHistory = EditorNavigationHistory()
+    @Published private(set) var recentFileURLs: [URL] = []
+    @Published private(set) var scrollPositionRevision = 0
     @Published var text = ""
     @Published var errorMessage = ""
 
@@ -44,9 +54,19 @@ final class EditorCoreBridge: ObservableObject {
     private var documentVersions: [UInt64: Int] = [:]
     private var taskStdout = ""
     private var taskStderr = ""
+    private var selectedTextRanges: [UInt64: Range<Int>] = [:]
+    private var scrollPositions: [UInt64: EditorScrollPosition] = [:]
+    private var quickOpenCandidates: [QuickOpenCandidate] = []
+    private var workspaceSearchTask: Task<Void, Never>?
+    private var referenceSearchTask: Task<Void, Never>?
 
     init() {
         refreshLanguageServers()
+    }
+
+    deinit {
+        workspaceSearchTask?.cancel()
+        referenceSearchTask?.cancel()
     }
 
     private var bufferID: UInt64 {
@@ -63,6 +83,10 @@ final class EditorCoreBridge: ObservableObject {
 
     var isUntitled: Bool {
         hasOpenBuffer && fileURL == nil
+    }
+
+    var currentScrollPosition: EditorScrollPosition {
+        scrollPositions[bufferID] ?? .zero
     }
 
     var textBinding: Binding<String> {
@@ -89,6 +113,46 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         return "\(activeFindMatchIndex + 1) of \(findMatches.count)"
+    }
+
+    var workspaceSearchStatusText: String {
+        guard !workspaceSearchQuery.isEmpty else {
+            return "Search"
+        }
+
+        if isWorkspaceSearchRunning {
+            return "Searching..."
+        }
+
+        if workspaceSearchResults.isEmpty {
+            return "No matches"
+        }
+
+        return "\(workspaceSearchResults.count) results"
+    }
+
+    var quickOpenStatusText: String {
+        guard workspaceURL != nil else {
+            return "Open a folder first"
+        }
+
+        guard !quickOpenCandidates.isEmpty else {
+            return "No project files"
+        }
+
+        return quickOpenResults.isEmpty ? "No matches" : "\(quickOpenResults.count) files"
+    }
+
+    var referenceStatusText: String {
+        if isReferenceSearchRunning {
+            return "Searching..."
+        }
+
+        guard !referenceQuery.isEmpty else {
+            return "No symbol selected"
+        }
+
+        return referenceResults.isEmpty ? "No references" : "\(referenceResults.count) references"
     }
 
     var diagnosticLineIndexesForCurrentFile: Set<Int> {
@@ -153,6 +217,7 @@ final class EditorCoreBridge: ObservableObject {
             return switchToBuffer(id: buffer.id)
         }
 
+        captureCurrentViewState()
         let openedID = url.path.withCString { path in
             feOpenFile(path)
         }
@@ -168,6 +233,8 @@ final class EditorCoreBridge: ObservableObject {
         selectedTextRange = nil
         syncCurrentBufferState()
         sendCurrentDocumentOpenToLanguageServer()
+        recordRecentFile(url)
+        navigationHistory.replaceCurrent(currentNavigationLocation())
         focusRevision += 1
         statusText = "Opened \(url.path)"
         return true
@@ -176,6 +243,7 @@ final class EditorCoreBridge: ObservableObject {
     func openFolder(url: URL) {
         workspaceURL = url
         workspaceFileTree = WorkspaceFileNode.roots(in: url)
+        refreshQuickOpenCandidates()
         syncProjectTaskSummary(for: url)
         syncWorkspaceSearch()
         clearSelectedTask()
@@ -195,20 +263,26 @@ final class EditorCoreBridge: ObservableObject {
         documentVersions[newID] = 1
         selectedTextRange = nil
         syncCurrentBufferState()
+        navigationHistory.replaceCurrent(nil)
         focusRevision += 1
         statusText = "New untitled file"
     }
 
     @discardableResult
     func switchToBuffer(id bufferID: UInt64) -> Bool {
+        captureCurrentViewState()
         guard session.switchToBuffer(id: bufferID) else {
             return false
         }
 
-        selectedTextRange = nil
         syncPathFromCore()
         syncCurrentBufferState()
+        selectedTextRange = selectedTextRanges[self.bufferID]
         sendCurrentDocumentOpenToLanguageServer()
+        if let fileURL {
+            recordRecentFile(fileURL)
+        }
+        navigationHistory.replaceCurrent(currentNavigationLocation())
         focusRevision += 1
         statusText = "Switched to \(displayPath)"
         return true
@@ -225,20 +299,27 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         let wasCurrentBuffer = bufferID == self.bufferID
+        if wasCurrentBuffer {
+            captureCurrentViewState()
+        }
         sendDocumentCloseToLanguageServer(fileURL: buffer.fileURL)
         session.closeBuffer(id: bufferID)
         documentVersions[bufferID] = nil
+        selectedTextRanges[bufferID] = nil
+        scrollPositions[bufferID] = nil
         syncOpenBuffers()
 
         if session.hasOpenBuffer {
             if wasCurrentBuffer {
                 syncPathFromCore()
-                selectedTextRange = nil
                 syncCurrentBufferState()
+                selectedTextRange = selectedTextRanges[self.bufferID]
+                navigationHistory.replaceCurrent(currentNavigationLocation())
                 focusRevision += 1
             }
         } else {
             clearCurrentBufferState()
+            navigationHistory.replaceCurrent(nil)
             statusText = "No file open"
         }
     }
@@ -264,6 +345,9 @@ final class EditorCoreBridge: ObservableObject {
         syncOpenBuffers()
         statusText = "Saved \(displayPath)"
         sendCurrentDocumentSaveToLanguageServer()
+        if let fileURL {
+            recordRecentFile(fileURL)
+        }
         syncWorkspaceSearch()
         return true
     }
@@ -289,6 +373,8 @@ final class EditorCoreBridge: ObservableObject {
         syncMarkdownPreviewHTML()
         syncDirtyState()
         syncOpenBuffers()
+        recordRecentFile(url)
+        refreshQuickOpenCandidates()
         statusText = "Saved \(displayPath)"
         sendCurrentDocumentSaveToLanguageServer()
         syncWorkspaceSearch()
@@ -330,10 +416,22 @@ final class EditorCoreBridge: ObservableObject {
         }
 
         syncRenderSnapshot()
+        navigationHistory.replaceCurrent(currentNavigationLocation())
     }
 
     func setSelectionUTF8Range(_ range: Range<Int>?) {
         selectedTextRange = range
+        if hasOpenBuffer {
+            selectedTextRanges[bufferID] = range
+        }
+    }
+
+    func setScrollPosition(_ position: EditorScrollPosition) {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        scrollPositions[bufferID] = position
     }
 
     func undo() {
@@ -681,11 +779,14 @@ final class EditorCoreBridge: ObservableObject {
             return
         }
 
+        recordNavigationBeforeJump()
         let match = findMatches[index]
         activeFindMatchIndex = index
         selectedTextRange = match.range
+        selectedTextRanges[bufferID] = match.range
         setCursorUTF8Offset(match.range.lowerBound)
         focusRevision += 1
+        navigationHistory.replaceCurrent(currentNavigationLocation())
         statusText = "Found \(findQuery) at \(match.displayLocation)"
     }
 
@@ -694,7 +795,40 @@ final class EditorCoreBridge: ObservableObject {
         syncWorkspaceSearch()
     }
 
+    func selectNextWorkspaceSearchResult() {
+        guard !workspaceSearchResults.isEmpty else {
+            activeWorkspaceSearchResultIndex = nil
+            return
+        }
+
+        activeWorkspaceSearchResultIndex = activeWorkspaceSearchResultIndex
+            .map { ($0 + 1) % workspaceSearchResults.count }
+            ?? 0
+    }
+
+    func selectPreviousWorkspaceSearchResult() {
+        guard !workspaceSearchResults.isEmpty else {
+            activeWorkspaceSearchResultIndex = nil
+            return
+        }
+
+        activeWorkspaceSearchResultIndex = activeWorkspaceSearchResultIndex
+            .map { ($0 - 1 + workspaceSearchResults.count) % workspaceSearchResults.count }
+            ?? workspaceSearchResults.count - 1
+    }
+
+    func openActiveWorkspaceSearchResult() {
+        guard let activeWorkspaceSearchResultIndex,
+              workspaceSearchResults.indices.contains(activeWorkspaceSearchResultIndex)
+        else {
+            return
+        }
+
+        openWorkspaceSearchResult(workspaceSearchResults[activeWorkspaceSearchResultIndex])
+    }
+
     func openWorkspaceSearchResult(_ result: WorkspaceSearchResult) {
+        recordNavigationBeforeJump()
         guard open(url: result.fileURL) else {
             return
         }
@@ -706,7 +840,137 @@ final class EditorCoreBridge: ObservableObject {
         )
         setCursorUTF8Offset(cursorOffset)
         focusRevision += 1
+        navigationHistory.replaceCurrent(currentNavigationLocation())
         statusText = "Opened \(result.displayLocation)"
+    }
+
+    func updateQuickOpenQuery(_ query: String) {
+        quickOpenQuery = query
+        syncQuickOpenResults()
+    }
+
+    func openQuickOpenResult(_ result: QuickOpenResult) {
+        recordNavigationBeforeJump()
+        guard open(url: result.fileURL) else {
+            return
+        }
+
+        navigationHistory.replaceCurrent(currentNavigationLocation())
+        statusText = "Opened \(result.displayPath)"
+    }
+
+    func goToLine(_ input: String) -> Bool {
+        guard hasOpenBuffer else {
+            statusText = "Open a file before jumping to a line"
+            return false
+        }
+
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lineNumber = Int(trimmed), lineNumber > 0 else {
+            statusText = "Enter a valid line number"
+            return false
+        }
+
+        let maxLine = max(renderSnapshot.lines.count, 1)
+        guard lineNumber <= maxLine else {
+            statusText = "Line \(lineNumber) is beyond the end of the file"
+            return false
+        }
+
+        recordNavigationBeforeJump()
+        let cursorOffset = TextEditingPrimitives.utf8Offset(in: text, line: lineNumber - 1, column: 0)
+        selectedTextRange = nil
+        selectedTextRanges[bufferID] = nil
+        setCursorUTF8Offset(cursorOffset)
+        focusRevision += 1
+        navigationHistory.replaceCurrent(currentNavigationLocation())
+        statusText = "Jumped to line \(lineNumber)"
+        return true
+    }
+
+    func findReferencesForCurrentQuery() {
+        guard let workspaceURL else {
+            referenceQuery = ""
+            referenceResults = []
+            statusText = "Open a folder before finding references"
+            return
+        }
+
+        guard hasOpenBuffer,
+              let query = TextQueryExtraction.query(
+                in: text,
+                selectedRange: selectedTextRange,
+                cursorUTF8Offset: TextEditingPrimitives.utf8Offset(
+                    in: text,
+                    line: renderSnapshot.cursorLine,
+                    column: renderSnapshot.cursorColumn
+                )
+              )
+        else {
+            referenceQuery = ""
+            referenceResults = []
+            statusText = "Select a symbol or place the cursor on a word"
+            return
+        }
+
+        referenceSearchTask?.cancel()
+        referenceQuery = query
+        referenceResults = []
+        isReferenceSearchRunning = true
+        statusText = "Finding references for \(query)"
+
+        referenceSearchTask = Task { [workspaceURL, query] in
+            let results = await Task.detached {
+                WorkspaceReferenceSearch.search(query: query, workspaceURL: workspaceURL)
+            }.value
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self.referenceResults = results
+            self.isReferenceSearchRunning = false
+            self.statusText = results.isEmpty
+                ? "No references for \(query)"
+                : "Found \(results.count) references for \(query)"
+        }
+    }
+
+    func openReferenceResult(_ result: WorkspaceReferenceResult) {
+        recordNavigationBeforeJump()
+        guard open(url: result.fileURL) else {
+            return
+        }
+
+        let cursorOffset = TextEditingPrimitives.utf8Offset(
+            in: text,
+            line: result.line,
+            column: result.column
+        )
+        setCursorUTF8Offset(cursorOffset)
+        focusRevision += 1
+        navigationHistory.replaceCurrent(currentNavigationLocation())
+        statusText = "Opened \(result.displayLocation)"
+    }
+
+    func goBackInNavigationHistory() {
+        navigationHistory.replaceCurrent(currentNavigationLocation())
+        guard let location = navigationHistory.goBack() else {
+            statusText = "No previous navigation location"
+            return
+        }
+
+        navigate(to: location)
+    }
+
+    func goForwardInNavigationHistory() {
+        navigationHistory.replaceCurrent(currentNavigationLocation())
+        guard let location = navigationHistory.goForward() else {
+            statusText = "No next navigation location"
+            return
+        }
+
+        navigate(to: location)
     }
 
     func isCurrentFile(_ node: WorkspaceFileNode) -> Bool {
@@ -1120,11 +1384,16 @@ final class EditorCoreBridge: ObservableObject {
     }
 
     private func syncFindMatches() {
+        guard !findQuery.isEmpty else {
+            findMatches = []
+            activeFindMatchIndex = nil
+            return
+        }
+
         findMatches = TextSearch.matches(in: text, query: findQuery)
 
         if findMatches.isEmpty {
             activeFindMatchIndex = nil
-            selectedTextRange = nil
         } else if let activeFindMatchIndex, findMatches.indices.contains(activeFindMatchIndex) {
         } else {
             activeFindMatchIndex = 0
@@ -1133,18 +1402,117 @@ final class EditorCoreBridge: ObservableObject {
 
     private func syncWorkspaceSearch() {
         guard let workspaceURL else {
+            workspaceSearchTask?.cancel()
+            isWorkspaceSearchRunning = false
             workspaceSearchResults = []
+            activeWorkspaceSearchResultIndex = nil
             return
         }
 
-        workspaceSearchResults = WorkspaceTextSearch.search(
-            query: workspaceSearchQuery,
-            workspaceURL: workspaceURL
+        let query = workspaceSearchQuery
+        workspaceSearchTask?.cancel()
+
+        guard !query.isEmpty else {
+            workspaceSearchResults = []
+            activeWorkspaceSearchResultIndex = nil
+            isWorkspaceSearchRunning = false
+            return
+        }
+
+        isWorkspaceSearchRunning = true
+        workspaceSearchTask = Task { [workspaceURL, query] in
+            let results = await Task.detached {
+                WorkspaceTextSearch.search(query: query, workspaceURL: workspaceURL)
+            }.value
+
+            guard !Task.isCancelled, self.workspaceSearchQuery == query else {
+                return
+            }
+
+            self.workspaceSearchResults = results
+            self.activeWorkspaceSearchResultIndex = results.isEmpty ? nil : 0
+            self.isWorkspaceSearchRunning = false
+        }
+    }
+
+    private func refreshQuickOpenCandidates() {
+        if let workspaceURL {
+            quickOpenCandidates = QuickOpenMatcher.candidates(in: workspaceURL)
+        } else {
+            quickOpenCandidates = []
+        }
+        syncQuickOpenResults()
+    }
+
+    private func syncQuickOpenResults() {
+        quickOpenResults = QuickOpenMatcher.results(
+            query: quickOpenQuery,
+            candidates: quickOpenCandidates,
+            openFileURLs: openBuffers.compactMap(\.fileURL),
+            recentFileURLs: recentFileURLs
         )
+    }
+
+    private func recordRecentFile(_ url: URL) {
+        let standardizedURL = url.standardizedFileURL
+        recentFileURLs.removeAll { $0.standardizedFileURL == standardizedURL }
+        recentFileURLs.insert(standardizedURL, at: 0)
+        if recentFileURLs.count > 40 {
+            recentFileURLs.removeLast(recentFileURLs.count - 40)
+        }
+        syncQuickOpenResults()
+    }
+
+    private func captureCurrentViewState() {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        selectedTextRanges[bufferID] = selectedTextRange
+    }
+
+    private func recordNavigationBeforeJump() {
+        guard let location = currentNavigationLocation() else {
+            return
+        }
+
+        navigationHistory.visit(location)
+    }
+
+    private func currentNavigationLocation() -> NavigationLocation? {
+        guard hasOpenBuffer, let fileURL else {
+            return nil
+        }
+
+        return NavigationLocation(
+            fileURL: fileURL,
+            line: renderSnapshot.cursorLine,
+            column: renderSnapshot.cursorColumn,
+            scrollPosition: currentScrollPosition
+        )
+    }
+
+    private func navigate(to location: NavigationLocation) {
+        guard open(url: location.fileURL) else {
+            return
+        }
+
+        let cursorOffset = TextEditingPrimitives.utf8Offset(
+            in: text,
+            line: location.line,
+            column: location.column
+        )
+        scrollPositions[bufferID] = location.scrollPosition
+        scrollPositionRevision += 1
+        setCursorUTF8Offset(cursorOffset)
+        focusRevision += 1
+        navigationHistory.replaceCurrent(location)
+        statusText = "Opened \(location.displayLocation)"
     }
 
     private func syncOpenBuffers() {
         openBuffers = session.openBuffers
+        syncQuickOpenResults()
     }
 
     private func reportLastError(prefix: String) {

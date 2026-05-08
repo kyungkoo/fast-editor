@@ -25,6 +25,8 @@ extension ContentView {
                 Divider()
                 workspaceSearchSection
                 Divider()
+                referencesSection
+                Divider()
                 fileTreeSection
                 Divider()
                 languageServerSection
@@ -72,15 +74,54 @@ extension ContentView {
                 }
             ))
             .textFieldStyle(.roundedBorder)
+            .onSubmit {
+                editor.openActiveWorkspaceSearchResult()
+            }
+            .onKeyPress(.tab, phases: .down) { press in
+                if press.modifiers.contains(.shift) {
+                    editor.selectPreviousWorkspaceSearchResult()
+                } else {
+                    editor.selectNextWorkspaceSearchResult()
+                }
+                return .handled
+            }
+
+            HStack(spacing: 8) {
+                Text(editor.workspaceSearchStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    editor.selectPreviousWorkspaceSearchResult()
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(editor.workspaceSearchResults.isEmpty)
+                .help("Previous result")
+
+                Button {
+                    editor.selectNextWorkspaceSearchResult()
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(editor.workspaceSearchResults.isEmpty)
+                .help("Next result")
+            }
+            .buttonStyle(.borderless)
 
             if !editor.workspaceSearchQuery.isEmpty {
-                if editor.workspaceSearchResults.isEmpty {
+                if editor.isWorkspaceSearchRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if editor.workspaceSearchResults.isEmpty {
                     Label("No matches", systemImage: "magnifyingglass")
                         .foregroundStyle(.secondary)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(editor.workspaceSearchResults) { result in
+                            ForEach(Array(editor.workspaceSearchResults.enumerated()), id: \.element.id) { index, result in
                                 Button {
                                     editor.openWorkspaceSearchResult(result)
                                 } label: {
@@ -95,6 +136,10 @@ extension ContentView {
                                             .truncationMode(.tail)
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 4)
+                                    .background(editor.activeWorkspaceSearchResultIndex == index ? Color.accentColor.opacity(0.14) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -102,6 +147,58 @@ extension ContentView {
                     }
                     .frame(maxHeight: 180)
                 }
+            }
+        }
+        .font(.callout)
+        .padding(12)
+    }
+
+    var referencesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("References")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    editor.findReferencesForCurrentQuery()
+                } label: {
+                    Image(systemName: "scope")
+                }
+                .help("Find references")
+            }
+
+            Text(editor.referenceStatusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if editor.isReferenceSearchRunning {
+                ProgressView()
+                    .controlSize(.small)
+            } else if !editor.referenceResults.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(editor.referenceResults) { result in
+                            Button {
+                                editor.openReferenceResult(result)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Label(result.displayLocation, systemImage: "point.3.connected.trianglepath.dotted")
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Text(result.preview)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
             }
         }
         .font(.callout)

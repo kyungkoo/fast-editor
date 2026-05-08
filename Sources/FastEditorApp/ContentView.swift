@@ -7,6 +7,9 @@ struct ContentView: View {
     @State var showsAgentPanel = true
     @State var showsTaskOutputPanel = true
     @State var showsFindBar = true
+    @State var showsQuickOpenPanel = false
+    @State var showsGoToLinePanel = false
+    @State var goToLineInput = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,13 +34,48 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.save)) { _ in
             saveFile()
         }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.undo)) { _ in
+            editor.undo()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.redo)) { _ in
+            editor.redo()
+        }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.find)) { _ in
             showsFindBar = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.quickOpen)) { _ in
+            editor.updateQuickOpenQuery("")
+            showsQuickOpenPanel = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.goToLine)) { _ in
+            goToLineInput = ""
+            showsGoToLinePanel = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.findReferences)) { _ in
+            editor.findReferencesForCurrentQuery()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.navigateBack)) { _ in
+            editor.goBackInNavigationHistory()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.navigateForward)) { _ in
+            editor.goForwardInNavigationHistory()
         }
         .onChange(of: editor.selectedTaskPlan?.taskID) { _, taskID in
             if taskID != nil {
                 showsTaskOutputPanel = true
             }
+        }
+        .sheet(isPresented: $showsQuickOpenPanel) {
+            QuickOpenPanel(editor: editor, isPresented: $showsQuickOpenPanel)
+                .frame(width: 560, height: 420)
+        }
+        .sheet(isPresented: $showsGoToLinePanel) {
+            GoToLinePanel(
+                editor: editor,
+                input: $goToLineInput,
+                isPresented: $showsGoToLinePanel
+            )
+            .frame(width: 320, height: 120)
         }
     }
 
@@ -59,6 +97,8 @@ struct ContentView: View {
     var centerSurface: some View {
         VStack(spacing: 0) {
             editorSurface
+            Divider()
+            statusBar
 
             if showsTaskOutputPanel, let plan = editor.selectedTaskPlan {
                 Divider()

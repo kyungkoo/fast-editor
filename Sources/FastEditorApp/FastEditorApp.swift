@@ -35,11 +35,50 @@ struct FastEditorApp: App {
                 .keyboardShortcut("s")
             }
 
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    AppCommand.post(AppCommand.undo)
+                }
+                .keyboardShortcut("z")
+
+                Button("Redo") {
+                    AppCommand.post(AppCommand.redo)
+                }
+                .keyboardShortcut("Z", modifiers: [.command, .shift])
+            }
+
             CommandGroup(replacing: .textEditing) {
                 Button("Find") {
                     AppCommand.post(AppCommand.find)
                 }
                 .keyboardShortcut("f")
+
+                Button("Quick Open") {
+                    AppCommand.post(AppCommand.quickOpen)
+                }
+                .keyboardShortcut("p")
+
+                Button("Go to Line") {
+                    AppCommand.post(AppCommand.goToLine)
+                }
+                .keyboardShortcut("l")
+
+                Button("Find References") {
+                    AppCommand.post(AppCommand.findReferences)
+                }
+                .keyboardShortcut("r")
+            }
+
+            CommandMenu("Navigate") {
+                Button("Back") {
+                    AppCommand.post(AppCommand.navigateBack)
+                }
+                .keyboardShortcut("[")
+
+                Button("Forward") {
+                    AppCommand.post(AppCommand.navigateForward)
+                }
+                .keyboardShortcut("]")
             }
         }
     }

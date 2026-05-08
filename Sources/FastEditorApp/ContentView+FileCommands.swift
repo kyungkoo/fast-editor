@@ -24,17 +24,20 @@ extension ContentView {
         }
     }
 
-    func saveFile() {
+    @discardableResult
+    func saveFile() -> Bool {
         if editor.isUntitled {
             let panel = NSSavePanel()
             panel.canCreateDirectories = true
             panel.nameFieldStringValue = "Untitled.txt"
 
             if panel.runModal() == .OK, let url = panel.url {
-                _ = editor.saveAs(url: url)
+                return editor.saveAs(url: url)
             }
+
+            return false
         } else {
-            _ = editor.save()
+            return editor.save()
         }
     }
 
@@ -47,11 +50,27 @@ extension ContentView {
         let alert = NSAlert()
         alert.messageText = "Close \(buffer.title)?"
         alert.informativeText = "This buffer has unsaved changes."
+        alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Discard Changes")
         alert.addButton(withTitle: "Cancel")
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let previousBufferID = editor.renderSnapshot.bufferID
+            if previousBufferID != buffer.id {
+                _ = editor.switchToBuffer(id: buffer.id)
+            }
+            guard saveFile() else {
+                if previousBufferID != buffer.id {
+                    _ = editor.switchToBuffer(id: previousBufferID)
+                }
+                return
+            }
+            editor.closeBuffer(id: buffer.id)
+        case .alertSecondButtonReturn:
             editor.closeBuffer(id: buffer.id, force: true)
+        default:
+            break
         }
     }
 }

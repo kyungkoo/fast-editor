@@ -10,10 +10,13 @@ struct MetalTextEditor: NSViewRepresentable {
     var snapshot: EditorRenderSnapshot
     var isEditable: Bool
     var focusRevision: Int
+    var scrollPosition: EditorScrollPosition
+    var scrollPositionRevision: Int
     var diagnosticLineIndexes: Set<Int> = []
     var onTextChange: (String, Int) -> Void
     var onCursorMove: (Int) -> Void
     var onSelectionChange: (Range<Int>?) -> Void
+    var onScrollPositionChange: (EditorScrollPosition) -> Void
     var onUndo: () -> Void
     var onRedo: () -> Void
 
@@ -29,8 +32,14 @@ struct MetalTextEditor: NSViewRepresentable {
         view.diagnosticLineIndexes = diagnosticLineIndexes
         view.onCursorMove = onCursorMove
         view.onSelectionChange = onSelectionChange
+        view.onScrollPositionChange = onScrollPositionChange
         view.onUndo = onUndo
         view.onRedo = onRedo
+        view.restoreScrollPosition(
+            scrollPosition,
+            forBufferID: snapshot.bufferID,
+            revision: scrollPositionRevision
+        )
         view.focus(revision: focusRevision)
     }
 }
@@ -77,6 +86,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     var onTextChange: ((String, Int) -> Void)?
     var onCursorMove: ((Int) -> Void)?
     var onSelectionChange: ((Range<Int>?) -> Void)?
+    var onScrollPositionChange: ((EditorScrollPosition) -> Void)?
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var diagnosticLineIndexes: Set<Int> = [] {
@@ -94,6 +104,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     private let style = MetalTextEditorStyle()
     private var viewport = MetalTextViewport()
     private var cursorOffset = 0
+    private var restoredScrollKey: (bufferID: UInt64, revision: Int)?
     private var lastFocusedRevision = 0
     private var markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
     private var selectionAnchorOffset: Int?
@@ -180,6 +191,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         scrollOffset.x -= event.scrollingDeltaX
         scrollOffset.y -= event.scrollingDeltaY
         clampScrollOffset()
+        publishScrollPosition()
         setNeedsDisplay(bounds)
     }
 
@@ -316,6 +328,18 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         DispatchQueue.main.async {
             self.window?.makeFirstResponder(self)
         }
+    }
+
+    func restoreScrollPosition(_ position: EditorScrollPosition, forBufferID bufferID: UInt64, revision: Int) {
+        let key = (bufferID, revision)
+        guard restoredScrollKey?.bufferID != key.0 || restoredScrollKey?.revision != key.1 else {
+            return
+        }
+
+        restoredScrollKey = key
+        scrollOffset = CGPoint(x: position.x, y: position.y)
+        clampScrollOffset()
+        setNeedsDisplay(bounds)
     }
 
     func insertText(_ insertString: Any, replacementRange: NSRange) {
@@ -849,6 +873,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         cursorOffset = clampCursorOffset(cursorOffset)
         selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
         ensureCursorVisible()
+        publishScrollPosition()
         onTextChange?(text, cursorOffset)
         onSelectionChange?(selectedUTF8Range)
         setNeedsDisplay(bounds)
@@ -858,9 +883,17 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         cursorOffset = clampCursorOffset(cursorOffset)
         selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
         ensureCursorVisible()
+        publishScrollPosition()
         onCursorMove?(cursorOffset)
         onSelectionChange?(selectedUTF8Range)
         setNeedsDisplay(bounds)
+    }
+
+    private func publishScrollPosition() {
+        onScrollPositionChange?(EditorScrollPosition(
+            x: Double(scrollOffset.x),
+            y: Double(scrollOffset.y)
+        ))
     }
 
     private func ensureCursorVisible() {

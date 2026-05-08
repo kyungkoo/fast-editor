@@ -141,10 +141,13 @@ extension ContentView {
             snapshot: editor.renderSnapshot,
             isEditable: editor.hasOpenBuffer,
             focusRevision: editor.focusRevision,
+            scrollPosition: editor.currentScrollPosition,
+            scrollPositionRevision: editor.scrollPositionRevision,
             diagnosticLineIndexes: editor.diagnosticLineIndexesForCurrentFile,
             onTextChange: editor.replaceText,
             onCursorMove: editor.setCursorUTF8Offset,
             onSelectionChange: editor.setSelectionUTF8Range,
+            onScrollPositionChange: editor.setScrollPosition,
             onUndo: editor.undo,
             onRedo: editor.redo
         )
