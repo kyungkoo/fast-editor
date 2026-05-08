@@ -1,4 +1,4 @@
-use crate::{BufferId, EditorCore, EditorError};
+use crate::{detect_agent_providers, BufferId, EditorCore, EditorError};
 use std::ffi::CStr;
 use std::fmt;
 use std::os::raw::c_char;
@@ -193,6 +193,20 @@ pub extern "C" fn fe_get_path(buffer_id: BufferId) -> FeString {
         Ok(None) => {
             clear_last_error();
             FeString::empty()
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fe_detect_agent_providers() -> FeString {
+    match serde_json::to_string(&detect_agent_providers()).map_err(|_| EditorError::InvalidUtf8) {
+        Ok(providers) => {
+            clear_last_error();
+            FeString::from_string(providers)
         }
         Err(error) => {
             set_last_error(error);

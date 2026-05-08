@@ -26,6 +26,9 @@ func feGetMarkdownPreviewHTML(_ bufferID: UInt64) -> FeString
 @_silgen_name("fe_get_path")
 func feGetPath(_ bufferID: UInt64) -> FeString
 
+@_silgen_name("fe_detect_agent_providers")
+func feDetectAgentProviders() -> FeString
+
 @_silgen_name("fe_replace_text")
 func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
 

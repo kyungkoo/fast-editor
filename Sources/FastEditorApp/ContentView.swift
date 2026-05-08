@@ -41,7 +41,7 @@ struct ContentView: View {
                 .frame(minWidth: 420)
 
             if showsAgentPanel {
-                agentPanel
+                AgentPanel(editor: editor)
                     .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
             }
         }
@@ -165,34 +165,6 @@ struct ContentView: View {
             Spacer()
         }
         .background(Color(nsColor: .underPageBackgroundColor))
-    }
-
-    private var agentPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Agent Panel")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("No session", systemImage: "sparkles")
-                Label("Idle", systemImage: "doc.text")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(12)
-
-            Spacer()
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func openFile() {

@@ -1,5 +1,8 @@
 use crate::ffi::*;
-use crate::{BufferId, DocumentLanguage, EditorCore, EditorError, RenderSpanKind};
+use crate::{
+    detect_agent_providers_in_path, AgentProviderId, BufferId, DocumentLanguage, EditorCore,
+    EditorError, RenderSpanKind,
+};
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -236,6 +239,40 @@ fn render_snapshot_exposes_markdown_highlight_spans() {
         .spans
         .iter()
         .any(|span| span.kind == RenderSpanKind::MarkdownEmphasis));
+}
+
+#[test]
+fn agent_provider_detection_reports_available_external_clis_from_path() {
+    let dir = make_temp_dir("agent_provider_detection_reports_available_external_clis_from_path");
+    let codex = dir.join("codex");
+    let claude = dir.join("claude");
+    fs::write(&codex, "").expect("write codex stub");
+    fs::write(&claude, "").expect("write claude stub");
+
+    let providers = detect_agent_providers_in_path(Some(dir.as_os_str()));
+
+    let codex_provider = providers
+        .iter()
+        .find(|provider| provider.id == AgentProviderId::Codex)
+        .expect("codex provider");
+    let claude_provider = providers
+        .iter()
+        .find(|provider| provider.id == AgentProviderId::Claude)
+        .expect("claude provider");
+
+    assert!(codex_provider.available);
+    assert_eq!(
+        codex_provider.executable_path.as_deref(),
+        Some(codex.as_path())
+    );
+    assert!(claude_provider.available);
+    assert_eq!(
+        claude_provider.executable_path.as_deref(),
+        Some(claude.as_path())
+    );
+    let _ = fs::remove_file(codex);
+    let _ = fs::remove_file(claude);
+    let _ = fs::remove_dir(dir);
 }
 
 #[test]
@@ -722,6 +759,18 @@ fn ffi_render_snapshot_includes_markdown_span_payload() {
     assert!(snapshot.contains("\"spans\""));
     assert!(snapshot.contains("\"kind\":\"markdown_heading\""));
     assert!(snapshot.contains("\"kind\":\"markdown_inline_code\""));
+}
+
+#[test]
+fn ffi_detect_agent_providers_returns_provider_payload() {
+    let _guard = ffi_test_lock();
+
+    let providers = take_ffi_string(fe_detect_agent_providers());
+
+    assert!(providers.contains("\"id\":\"codex\""));
+    assert!(providers.contains("\"id\":\"claude\""));
+    assert!(providers.contains("\"id\":\"gemini\""));
+    assert!(providers.contains("\"available\""));
 }
 
 #[test]
