@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showsMarkdownPreview = false
     @State private var showsAgentPanel = true
     @State private var showsTaskOutputPanel = true
+    @State private var showsFindBar = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.save)) { _ in
             saveFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppCommand.find)) { _ in
+            showsFindBar = true
         }
         .onChange(of: editor.selectedTaskPlan?.taskID) { _, taskID in
             if taskID != nil {
@@ -66,6 +70,22 @@ struct ContentView: View {
 
     @ViewBuilder
     private var editorSurface: some View {
+        VStack(spacing: 0) {
+            if editor.hasOpenBuffer {
+                editorTabs
+                Divider()
+                if showsFindBar {
+                    findBar
+                    Divider()
+                }
+            }
+
+            editorBody
+        }
+    }
+
+    @ViewBuilder
+    private var editorBody: some View {
         if showsMarkdownPreview {
             HStack(spacing: 0) {
                 editorPane
@@ -78,6 +98,108 @@ struct ContentView: View {
         }
     }
 
+    private var editorTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(editor.openBuffers) { buffer in
+                    bufferTab(buffer)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func bufferTab(_ buffer: EditorOpenBuffer) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                editor.switchToBuffer(id: buffer.id)
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: buffer.fileURL == nil ? "doc.badge.plus" : "doc.text")
+                    Text(buffer.title)
+                        .lineLimit(1)
+                    if buffer.isDirty {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 6, height: 6)
+                    }
+                }
+                .padding(.vertical, 4)
+                .padding(.leading, 8)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                closeBuffer(buffer)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+            .padding(.trailing, 6)
+        }
+        .foregroundStyle(editor.renderSnapshot.bufferID == buffer.id ? Color.primary : Color.secondary)
+        .background(editor.renderSnapshot.bufferID == buffer.id ? Color.accentColor.opacity(0.16) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .help(buffer.subtitle)
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Find in file", text: Binding(
+                get: { editor.findQuery },
+                set: { query in
+                    editor.updateFindQuery(query)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 220)
+            .onSubmit {
+                editor.selectNextFindMatch()
+            }
+
+            Text(editor.findStatusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 78, alignment: .leading)
+
+            Button {
+                editor.selectPreviousFindMatch()
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(editor.findMatches.isEmpty)
+            .help("Previous match")
+
+            Button {
+                editor.selectNextFindMatch()
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(editor.findMatches.isEmpty)
+            .help("Next match")
+
+            Button {
+                showsFindBar = false
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .help("Hide find")
+
+            Spacer()
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
     @ViewBuilder
     private var editorPane: some View {
         MetalTextEditor(
@@ -85,6 +207,7 @@ struct ContentView: View {
             snapshot: editor.renderSnapshot,
             isEditable: editor.hasOpenBuffer,
             focusRevision: editor.focusRevision,
+            diagnosticLineIndexes: editor.diagnosticLineIndexesForCurrentFile,
             onTextChange: editor.replaceText,
             onCursorMove: editor.setCursorUTF8Offset,
             onSelectionChange: editor.setSelectionUTF8Range,
@@ -166,7 +289,11 @@ struct ContentView: View {
 
             if editor.workspaceURL != nil {
                 Divider()
+                workspaceSearchSection
+                Divider()
                 fileTreeSection
+                Divider()
+                languageServerSection
                 Divider()
                 taskSection
             }
@@ -198,6 +325,55 @@ struct ContentView: View {
         .padding(12)
     }
 
+    private var workspaceSearchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Search")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Workspace search", text: Binding(
+                get: { editor.workspaceSearchQuery },
+                set: { query in
+                    editor.updateWorkspaceSearchQuery(query)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+
+            if !editor.workspaceSearchQuery.isEmpty {
+                if editor.workspaceSearchResults.isEmpty {
+                    Label("No matches", systemImage: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(editor.workspaceSearchResults) { result in
+                                Button {
+                                    editor.openWorkspaceSearchResult(result)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Label(result.displayLocation, systemImage: "doc.text.magnifyingglass")
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Text(result.preview)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 180)
+                }
+            }
+        }
+        .font(.callout)
+        .padding(12)
+    }
+
     @ViewBuilder
     private func fileTreeRow(_ node: WorkspaceFileNode) -> some View {
         if node.isDirectory {
@@ -220,6 +396,82 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help(node.url.path)
         }
+    }
+
+    private var languageServerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Language")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if editor.availableLanguageServerProviders.isEmpty {
+                Label("No language server detected", systemImage: "waveform.path.ecg")
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("Server", selection: Binding(
+                    get: { editor.selectedLanguageServerID },
+                    set: { id in
+                        editor.selectLanguageServer(id)
+                    }
+                )) {
+                    ForEach(editor.availableLanguageServerProviders) { provider in
+                        Text(provider.displayName).tag(Optional(provider.id))
+                    }
+                }
+                .labelsHidden()
+                .disabled(editor.isLanguageServerRunning)
+
+                HStack {
+                    Button(editor.isLanguageServerRunning ? "Stop" : "Start") {
+                        if editor.isLanguageServerRunning {
+                            editor.stopLanguageServer()
+                        } else {
+                            editor.startLanguageServer()
+                        }
+                    }
+
+                    Button {
+                        editor.refreshLanguageServers()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(editor.isLanguageServerRunning)
+                    .help("Refresh language servers")
+
+                    Spacer()
+                }
+
+                Text(editor.languageServerStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            if !editor.languageServerDiagnosticsForCurrentFile.isEmpty {
+                Divider()
+
+                ForEach(editor.languageServerDiagnosticsForCurrentFile) { diagnostic in
+                    Button {
+                        editor.navigateToLanguageServerDiagnostic(diagnostic)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label(diagnostic.locationDisplay, systemImage: diagnosticIcon(for: diagnostic.severity))
+                                .foregroundStyle(diagnosticColor(for: diagnostic.severity))
+                                .lineLimit(1)
+
+                            Text(diagnostic.message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .font(.callout)
+        .padding(12)
     }
 
     private var taskSection: some View {
@@ -448,6 +700,23 @@ struct ContentView: View {
             }
         } else {
             _ = editor.save()
+        }
+    }
+
+    private func closeBuffer(_ buffer: EditorOpenBuffer) {
+        guard buffer.isDirty else {
+            editor.closeBuffer(id: buffer.id)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Close \(buffer.title)?"
+        alert.informativeText = "This buffer has unsaved changes."
+        alert.addButton(withTitle: "Discard Changes")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            editor.closeBuffer(id: buffer.id, force: true)
         }
     }
 }

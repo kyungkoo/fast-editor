@@ -34,6 +34,13 @@ struct FastEditorApp: App {
                 }
                 .keyboardShortcut("s")
             }
+
+            CommandGroup(replacing: .textEditing) {
+                Button("Find") {
+                    AppCommand.post(AppCommand.find)
+                }
+                .keyboardShortcut("f")
+            }
         }
     }
 }

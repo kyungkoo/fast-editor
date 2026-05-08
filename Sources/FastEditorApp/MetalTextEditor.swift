@@ -9,6 +9,7 @@ struct MetalTextEditor: NSViewRepresentable {
     var snapshot: EditorRenderSnapshot
     var isEditable: Bool
     var focusRevision: Int
+    var diagnosticLineIndexes: Set<Int> = []
     var onTextChange: (String, Int) -> Void
     var onCursorMove: (Int) -> Void
     var onSelectionChange: (Range<Int>?) -> Void
@@ -24,6 +25,7 @@ struct MetalTextEditor: NSViewRepresentable {
         view.snapshot = snapshot
         view.isEditable = isEditable
         view.onTextChange = onTextChange
+        view.diagnosticLineIndexes = diagnosticLineIndexes
         view.onCursorMove = onCursorMove
         view.onSelectionChange = onSelectionChange
         view.onUndo = onUndo
@@ -76,6 +78,15 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     var onSelectionChange: ((Range<Int>?) -> Void)?
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
+    var diagnosticLineIndexes: Set<Int> = [] {
+        didSet {
+            guard oldValue != diagnosticLineIndexes else {
+                return
+            }
+
+            setNeedsDisplay(bounds)
+        }
+    }
 
     private let commandQueue: MTLCommandQueue
     private let imageContext: CIContext
@@ -481,6 +492,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         NSGraphicsContext.current = graphicsContext
 
         drawBackground(in: context)
+        drawCurrentLineHighlight(in: context)
+        drawDiagnosticMarkers(in: context)
         drawSelectionHighlights(in: context)
         drawVisibleText(in: context)
         drawInsertionPointIfNeeded(in: context)
@@ -507,6 +520,43 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         context.move(to: CGPoint(x: gutterWidth - 0.5, y: 0))
         context.addLine(to: CGPoint(x: gutterWidth - 0.5, y: bounds.height))
         context.strokePath()
+    }
+
+    private func drawCurrentLineHighlight(in context: CGContext) {
+        guard isEditable, snapshot.lines.indices.contains(snapshot.cursorLine) else {
+            return
+        }
+
+        let highlightY = verticalPadding + CGFloat(snapshot.cursorLine) * lineHeight - scrollOffset.y
+        guard highlightY + lineHeight >= 0, highlightY <= bounds.height else {
+            return
+        }
+
+        context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.07).cgColor)
+        context.fill(CGRect(
+            x: gutterWidth,
+            y: highlightY,
+            width: max(0, bounds.width - gutterWidth),
+            height: lineHeight
+        ))
+    }
+
+    private func drawDiagnosticMarkers(in context: CGContext) {
+        guard !diagnosticLineIndexes.isEmpty else {
+            return
+        }
+
+        context.setFillColor(NSColor.systemRed.cgColor)
+
+        for lineIndex in visibleLineRange where diagnosticLineIndexes.contains(lineIndex) {
+            let centerY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y + lineHeight / 2
+            context.fillEllipse(in: CGRect(
+                x: gutterWidth - horizontalPadding - 7,
+                y: centerY - 3,
+                width: 6,
+                height: 6
+            ))
+        }
     }
 
     private func drawVisibleText(in context: CGContext) {
