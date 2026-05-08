@@ -238,7 +238,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         switch selector {
         case #selector(insertNewline(_:)):
             inputContext?.discardMarkedText()
-            replaceCharactersBeforeCursor(0, afterCursor: 0, with: "\n")
+            insertMarkdownNewline()
         case #selector(deleteBackward(_:)):
             inputContext?.discardMarkedText()
             replaceCharactersBeforeCursor(1, afterCursor: 0, with: "")
@@ -305,6 +305,11 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
     func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard isEditable, let insertedText = plainText(from: insertString) else {
+            return
+        }
+
+        if insertedText == "\n", replacementRange.location == NSNotFound {
+            insertMarkdownNewline()
             return
         }
 
@@ -668,6 +673,20 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     private func updateDrawableSize() {
         let scale = backingScaleFactor
         drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+    }
+
+    private func insertMarkdownNewline() {
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: cursorOffset,
+            selectedRange: selectedUTF8Range
+        )
+        text = result.text
+        cursorOffset = result.cursorUTF8Offset
+        selectionAnchorOffset = nil
+        markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
+        preferredColumn = nil
+        publishTextChange()
     }
 
     private func replaceCharactersBeforeCursor(

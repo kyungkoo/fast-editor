@@ -84,6 +84,66 @@ struct TextEditingPrimitivesTests {
         #expect(result.cursorUTF8Offset == "a한".utf8.count)
     }
 
+    @Test func markdownNewlineContinuesUnorderedListItems() {
+        let text = "- item"
+
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: text.utf8.count
+        )
+
+        #expect(result.text == "- item\n- ")
+        #expect(result.cursorUTF8Offset == "- item\n- ".utf8.count)
+    }
+
+    @Test func markdownNewlineIncrementsOrderedListItems() {
+        let text = "8. item"
+
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: text.utf8.count
+        )
+
+        #expect(result.text == "8. item\n9. ")
+        #expect(result.cursorUTF8Offset == "8. item\n9. ".utf8.count)
+    }
+
+    @Test func markdownNewlineRemovesEmptyListMarkers() {
+        let text = "- item\n- "
+
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: text.utf8.count
+        )
+
+        #expect(result.text == "- item\n")
+        #expect(result.cursorUTF8Offset == "- item\n".utf8.count)
+    }
+
+    @Test func markdownNewlineContinuesBlockQuotes() {
+        let text = "> quote"
+
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: text.utf8.count
+        )
+
+        #expect(result.text == "> quote\n> ")
+        #expect(result.cursorUTF8Offset == "> quote\n> ".utf8.count)
+    }
+
+    @Test func markdownNewlineInsideFencedCodeBlocksUsesPlainIndentation() {
+        let text = "```\n  - item"
+
+        let result = TextEditingPrimitives.replacingMarkdownNewline(
+            in: text,
+            cursorUTF8Offset: text.utf8.count
+        )
+
+        #expect(result.text == "```\n  - item\n  ")
+        #expect(result.cursorUTF8Offset == result.text.utf8.count)
+    }
+
     @Test func visibleLineRangeTracksScrolledViewportWithOverscan() {
         let range = TextEditingPrimitives.visibleLineRange(
             scrollY: 45,
