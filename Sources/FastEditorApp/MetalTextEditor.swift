@@ -76,10 +76,8 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
     private let commandQueue: MTLCommandQueue
     private let imageContext: CIContext
-    private let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    private let lineNumberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    private var scrollOffset = CGPoint.zero
-    private var contentSize = CGSize.zero
+    private let style = MetalTextEditorStyle()
+    private var viewport = MetalTextViewport()
     private var cursorOffset = 0
     private var lastFocusedRevision = 0
     private var markedRangeUTF16 = NSRange(location: NSNotFound, length: 0)
@@ -87,14 +85,34 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     private var mouseSelectionAnchorOffset: Int?
     private var preferredColumn: Int?
 
-    private let gutterWidth: CGFloat = 56
-    private let horizontalPadding: CGFloat = 12
-    private let verticalPadding: CGFloat = 10
-    private let caretWidth: CGFloat = 1.5
+    private var scrollOffset: CGPoint {
+        get {
+            viewport.scrollOffset
+        }
+        set {
+            viewport.scrollOffset = newValue
+        }
+    }
 
-    private lazy var lineHeight: CGFloat = {
-        ceil(font.ascender - font.descender + font.leading + 5)
-    }()
+    private var gutterWidth: CGFloat {
+        style.gutterWidth
+    }
+
+    private var horizontalPadding: CGFloat {
+        style.horizontalPadding
+    }
+
+    private var verticalPadding: CGFloat {
+        style.verticalPadding
+    }
+
+    private var caretWidth: CGFloat {
+        style.caretWidth
+    }
+
+    private var lineHeight: CGFloat {
+        style.lineHeight
+    }
 
     init() {
         guard let metalDevice = MTLCreateSystemDefaultDevice(),
@@ -359,7 +377,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
         actualRange?.pointee = validRange
         let substring = (text as NSString).substring(with: validRange)
-        return NSAttributedString(string: substring, attributes: [.font: font])
+        return NSAttributedString(string: substring, attributes: [.font: style.font])
     }
 
     func validAttributesForMarkedText() -> [NSAttributedString.Key] {
@@ -484,25 +502,20 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func drawVisibleText(in context: CGContext) {
-        let lineNumberAttributes: [NSAttributedString.Key: Any] = [
-            .font: lineNumberFont,
-            .foregroundColor: NSColor.secondaryLabelColor
-        ]
-
         for lineIndex in visibleLineRange {
             let line = snapshot.lines[lineIndex]
-            let baselineY = verticalPadding + CGFloat(lineIndex) * lineHeight - scrollOffset.y
+            let baselineY = style.verticalPadding + CGFloat(lineIndex) * style.lineHeight - scrollOffset.y
             let lineNumber = "\(line.lineNumber)" as NSString
-            let lineNumberSize = lineNumber.size(withAttributes: lineNumberAttributes)
+            let lineNumberSize = lineNumber.size(withAttributes: style.lineNumberAttributes)
             let lineNumberPoint = CGPoint(
-                x: gutterWidth - horizontalPadding - lineNumberSize.width,
+                x: style.gutterWidth - style.horizontalPadding - lineNumberSize.width,
                 y: baselineY
             )
 
-            lineNumber.draw(at: lineNumberPoint, withAttributes: lineNumberAttributes)
+            lineNumber.draw(at: lineNumberPoint, withAttributes: style.lineNumberAttributes)
 
             let textPoint = CGPoint(
-                x: gutterWidth + horizontalPadding - scrollOffset.x,
+                x: style.gutterWidth + style.horizontalPadding - scrollOffset.x,
                 y: baselineY
             )
             context.saveGState()
@@ -568,82 +581,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         for kind: EditorRenderSpanKind,
         defaultAttributes: [NSAttributedString.Key: Any]
     ) -> [NSAttributedString.Key: Any] {
-        var attributes = defaultAttributes
-        attributes[.foregroundColor] = color(for: kind)
-
-        switch kind {
-        case .markdownHeading:
-            attributes[.font] = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
-        case .markdownCode, .markdownInlineCode:
-            attributes[.backgroundColor] = NSColor.controlBackgroundColor
-        case .markdownEmphasis, .kotlinKeyword, .kotlinType, .kotlinFunction,
-             .rustKeyword, .rustType, .rustFunction,
-             .swiftKeyword, .swiftType, .swiftFunction:
-            attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
-        default:
-            break
-        }
-
-        return attributes
-    }
-
-    private func color(for kind: EditorRenderSpanKind) -> NSColor {
-        switch kind {
-        case .markdownHeading:
-            return .systemBlue
-        case .markdownListMarker:
-            return .systemOrange
-        case .markdownQuote:
-            return .systemGreen
-        case .markdownCode, .markdownInlineCode:
-            return .systemPurple
-        case .markdownLink:
-            return .systemBlue
-        case .markdownEmphasis:
-            return .systemPink
-        case .kotlinKeyword:
-            return .systemPink
-        case .kotlinType:
-            return .systemTeal
-        case .kotlinFunction:
-            return .systemBlue
-        case .kotlinString:
-            return .systemGreen
-        case .kotlinComment:
-            return .secondaryLabelColor
-        case .kotlinNumber:
-            return .systemOrange
-        case .kotlinAnnotation:
-            return .systemPurple
-        case .rustKeyword:
-            return .systemPink
-        case .rustType:
-            return .systemTeal
-        case .rustFunction:
-            return .systemBlue
-        case .rustString:
-            return .systemGreen
-        case .rustComment:
-            return .secondaryLabelColor
-        case .rustNumber:
-            return .systemOrange
-        case .rustAttribute:
-            return .systemPurple
-        case .swiftKeyword:
-            return .systemPink
-        case .swiftType:
-            return .systemTeal
-        case .swiftFunction:
-            return .systemBlue
-        case .swiftString:
-            return .systemGreen
-        case .swiftComment:
-            return .secondaryLabelColor
-        case .swiftNumber:
-            return .systemOrange
-        case .swiftAttribute:
-            return .systemPurple
-        }
+        style.textAttributes(for: kind, defaultAttributes: defaultAttributes)
     }
 
     private func drawSelectionHighlights(in context: CGContext) {
@@ -716,22 +654,15 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func recalculateContentMetrics() {
-        let longestLineWidth = snapshot.lines.reduce(CGFloat.zero) { longestWidth, line in
-            max(longestWidth, layoutMetrics.prefixWidth(column: line.text.count, in: line))
-        }
-
-        contentSize = CGSize(
-            width: gutterWidth + horizontalPadding * 2 + longestLineWidth,
-            height: verticalPadding * 2 + CGFloat(max(snapshot.lines.count, 1)) * lineHeight
+        viewport.recalculateContentSize(
+            snapshot: snapshot,
+            layoutMetrics: layoutMetrics,
+            style: style
         )
     }
 
     private func clampScrollOffset() {
-        let maxX = max(0, contentSize.width - bounds.width)
-        let maxY = max(0, contentSize.height - bounds.height)
-
-        scrollOffset.x = min(max(0, scrollOffset.x), maxX)
-        scrollOffset.y = min(max(0, scrollOffset.y), maxY)
+        viewport.clamp(to: bounds)
     }
 
     private func updateDrawableSize() {
@@ -881,15 +812,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private func plainText(from insertString: Any) -> String? {
-        if let text = insertString as? String {
-            return text
-        }
-
-        if let attributedText = insertString as? NSAttributedString {
-            return attributedText.string
-        }
-
-        return nil
+        MetalTextInputDecoder.plainText(from: insertString)
     }
 
     private func handleCommandShortcut(_ event: NSEvent) -> Bool {
@@ -942,9 +865,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             return
         }
 
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(selectedText, forType: .string)
+        MetalTextClipboard.copy(selectedText)
     }
 
     private func cutSelection() {
@@ -952,14 +873,12 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
             return
         }
 
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(selectedText, forType: .string)
+        MetalTextClipboard.copy(selectedText)
         replaceUTF8Range(selectedRange, with: "")
     }
 
     private func pasteFromClipboard() {
-        guard let pastedText = NSPasteboard.general.string(forType: .string), !pastedText.isEmpty else {
+        guard let pastedText = MetalTextClipboard.readString(), !pastedText.isEmpty else {
             return
         }
 
@@ -1103,10 +1022,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private var textAttributes: [NSAttributedString.Key: Any] {
-        [
-            .font: font,
-            .foregroundColor: NSColor.textColor
-        ]
+        style.textAttributes
     }
 
     private var layoutMetrics: MetalTextLayoutMetrics {
@@ -1117,11 +1033,10 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
     }
 
     private var visibleLineRange: Range<Int> {
-        TextEditingPrimitives.visibleLineRange(
-            scrollY: Double(scrollOffset.y),
-            viewportHeight: Double(bounds.height),
-            lineHeight: Double(lineHeight),
-            lineCount: snapshot.lines.count
+        viewport.visibleLineRange(
+            lineHeight: lineHeight,
+            lineCount: snapshot.lines.count,
+            viewportHeight: bounds.height
         )
     }
 }
