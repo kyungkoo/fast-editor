@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var editor = EditorCoreBridge()
     @State private var showsMarkdownPreview = false
     @State private var showsAgentPanel = true
+    @State private var showsTaskOutputPanel = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,11 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: AppCommand.save)) { _ in
             saveFile()
         }
+        .onChange(of: editor.selectedTaskPlan?.taskID) { _, taskID in
+            if taskID != nil {
+                showsTaskOutputPanel = true
+            }
+        }
     }
 
     private var workspaceSurface: some View {
@@ -36,12 +42,24 @@ struct ContentView: View {
             sidebar
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
 
-            editorSurface
+            centerSurface
                 .frame(minWidth: 420)
 
             if showsAgentPanel {
                 AgentPanel(editor: editor)
                     .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+            }
+        }
+    }
+
+    private var centerSurface: some View {
+        VStack(spacing: 0) {
+            editorSurface
+
+            if showsTaskOutputPanel, let plan = editor.selectedTaskPlan {
+                Divider()
+                taskOutputPanel(plan)
+                    .frame(minHeight: 160, idealHeight: 220, maxHeight: 300)
             }
         }
     }
@@ -113,6 +131,11 @@ struct ContentView: View {
             Toggle("Preview", isOn: $showsMarkdownPreview)
                 .toggleStyle(.switch)
                 .disabled(!editor.hasOpenBuffer)
+
+            if editor.selectedTaskPlan != nil {
+                Toggle("Output", isOn: $showsTaskOutputPanel)
+                    .toggleStyle(.switch)
+            }
 
             Toggle("Agent", isOn: $showsAgentPanel)
                 .toggleStyle(.switch)
@@ -259,6 +282,10 @@ struct ContentView: View {
                     }
                 }
 
+                Button("Output") {
+                    showsTaskOutputPanel = true
+                }
+
                 Spacer()
 
                 Text(editor.taskStatusText)
@@ -266,21 +293,57 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+        }
+    }
 
-            if !editor.taskOutput.isEmpty {
+    private func taskOutputPanel(_ plan: TaskExecutionPlan) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Task Output")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(plan.commandDisplay)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer()
+
+                Text(editor.taskStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Button("Hide") {
+                    showsTaskOutputPanel = false
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            HSplitView {
                 ScrollView {
-                    Text(editor.taskOutput)
+                    Text(editor.taskOutput.isEmpty ? "No output yet" : editor.taskOutput)
                         .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(editor.taskOutput.isEmpty ? Color.secondary : Color.primary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
                 }
-                .frame(maxHeight: 180)
+                .frame(minWidth: 260)
                 .background(Color(nsColor: .textBackgroundColor))
-            }
 
-            if !editor.taskDiagnostics.isEmpty {
-                Divider()
-                diagnosticsList
+                if !editor.taskDiagnostics.isEmpty {
+                    ScrollView {
+                        diagnosticsList
+                            .padding(12)
+                    }
+                    .frame(minWidth: 220, idealWidth: 280)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                }
             }
         }
     }
