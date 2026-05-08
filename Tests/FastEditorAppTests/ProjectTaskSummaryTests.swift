@@ -92,5 +92,8 @@ struct ProjectTaskSummaryTests {
         #expect(diagnostics[0].severity == .error)
         #expect(diagnostics[0].locationDisplay == "Sources/App.swift:12:4")
         #expect(diagnostics[0].message == "cannot find value")
+        #expect(diagnostics[0].targetLineIndex == 11)
+        #expect(diagnostics[0].targetColumnIndex == 3)
+        #expect(diagnostics[0].resolvedFileURL(workspaceURL: URL(fileURLWithPath: "/tmp/project"))?.path == "/tmp/project/Sources/App.swift")
     }
 }

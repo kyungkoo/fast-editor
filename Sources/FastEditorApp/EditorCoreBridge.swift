@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import FastEditorTextEditing
 
 @MainActor
 final class EditorCoreBridge: ObservableObject {
@@ -63,14 +64,15 @@ final class EditorCoreBridge: ObservableObject {
         )
     }
 
-    func open(url: URL) {
+    @discardableResult
+    func open(url: URL) -> Bool {
         let openedID = url.path.withCString { path in
             feOpenFile(path)
         }
 
         guard openedID != 0 else {
             reportLastError(prefix: "Open failed")
-            return
+            return false
         }
 
         session.replace(with: openedID)
@@ -81,6 +83,7 @@ final class EditorCoreBridge: ObservableObject {
         syncDirtyState()
         focusRevision += 1
         statusText = "Opened \(url.path)"
+        return true
     }
 
     func openFolder(url: URL) {
@@ -319,6 +322,34 @@ final class EditorCoreBridge: ObservableObject {
     func stopRunningTask() {
         runningTaskProcess?.terminate()
         taskStatusText = "Stopping task"
+    }
+
+    func navigateToDiagnostic(_ diagnostic: TaskDiagnostic) {
+        guard let url = diagnostic.resolvedFileURL(workspaceURL: workspaceURL) else {
+            errorMessage = "Diagnostic navigation failed: no file path for \(diagnostic.locationDisplay)"
+            return
+        }
+
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            errorMessage = "Diagnostic navigation failed: cannot read \(url.path)"
+            return
+        }
+
+        guard open(url: url) else {
+            return
+        }
+
+        if let line = diagnostic.targetLineIndex {
+            let column = diagnostic.targetColumnIndex ?? 0
+            let cursorOffset = TextEditingPrimitives.utf8Offset(
+                in: text,
+                line: line,
+                column: column
+            )
+            setCursorUTF8Offset(cursorOffset)
+            focusRevision += 1
+            statusText = "Opened \(url.path):\(line + 1):\(column + 1)"
+        }
     }
 
     private func syncTextFromCore() {

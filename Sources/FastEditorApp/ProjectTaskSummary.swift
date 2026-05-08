@@ -88,6 +88,32 @@ struct TaskDiagnostic: Decodable, Equatable, Identifiable {
 
         return file
     }
+
+    var targetLineIndex: Int? {
+        line.map { max(0, $0 - 1) }
+    }
+
+    var targetColumnIndex: Int? {
+        column.map { max(0, $0 - 1) }
+    }
+
+    func resolvedFileURL(workspaceURL: URL?) -> URL? {
+        guard let file, !file.isEmpty else {
+            return nil
+        }
+
+        if file.hasPrefix("/") {
+            return URL(fileURLWithPath: file).standardizedFileURL
+        }
+
+        guard let workspaceURL else {
+            return nil
+        }
+
+        return workspaceURL
+            .appendingPathComponent(file)
+            .standardizedFileURL
+    }
 }
 
 enum TaskDiagnosticSeverity: String, Decodable, Equatable {

@@ -248,17 +248,24 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             ForEach(editor.taskDiagnostics) { diagnostic in
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(diagnostic.locationDisplay, systemImage: diagnosticIcon(for: diagnostic.severity))
-                        .foregroundStyle(diagnosticColor(for: diagnostic.severity))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                Button {
+                    editor.navigateToDiagnostic(diagnostic)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(diagnostic.locationDisplay, systemImage: diagnosticIcon(for: diagnostic.severity))
+                            .foregroundStyle(diagnosticColor(for: diagnostic.severity))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
 
-                    Text(diagnostic.message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        Text(diagnostic.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.plain)
+                .help("Open \(diagnostic.locationDisplay)")
             }
         }
     }
