@@ -151,7 +151,7 @@ struct ContentView: View {
 
             Spacer()
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var taskSection: some View {
