@@ -62,11 +62,11 @@ struct AgentPanel: View {
                 }
 
             HStack {
-                Button(model.isRunning ? "Stop" : "Send File") {
+                Button(model.isRunning ? "Stop" : sendButtonTitle) {
                     if model.isRunning {
                         model.cancel()
                     } else {
-                        model.sendCurrentFile(fileURL: editor.fileURL, text: editor.text)
+                        model.send(context: editor.agentContext)
                     }
                 }
                 .disabled(!model.isRunning && (!editor.hasOpenBuffer || model.selectedProvider == nil))
@@ -85,7 +85,7 @@ struct AgentPanel: View {
                 HStack {
                     Button("Apply") {
                         if let proposedEdit = model.proposedEdit {
-                            editor.applyAgentReplacement(proposedEdit.replacementText)
+                            editor.applyAgentReplacement(proposedEdit)
                             model.rejectProposedEdit()
                         }
                     }
@@ -125,5 +125,9 @@ struct AgentPanel: View {
             get: { model.selectedProvider?.id },
             set: { model.selectedProviderID = $0 }
         )
+    }
+
+    private var sendButtonTitle: String {
+        editor.agentContext.isSelection ? "Send Selection" : "Send File"
     }
 }

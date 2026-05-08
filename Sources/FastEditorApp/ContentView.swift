@@ -87,6 +87,7 @@ struct ContentView: View {
             focusRevision: editor.focusRevision,
             onTextChange: editor.replaceText,
             onCursorMove: editor.setCursorUTF8Offset,
+            onSelectionChange: editor.setSelectionUTF8Range,
             onUndo: editor.undo,
             onRedo: editor.redo
         )

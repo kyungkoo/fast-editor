@@ -19,6 +19,7 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var taskDiagnostics: [TaskDiagnostic] = []
     @Published private(set) var taskStatusText = "No task selected"
     @Published private(set) var isTaskRunning = false
+    @Published private(set) var selectedTextRange: Range<Int>?
     @Published var text = ""
     @Published var errorMessage = ""
 
@@ -54,6 +55,10 @@ final class EditorCoreBridge: ObservableObject {
         )
     }
 
+    var agentContext: AgentContext {
+        AgentContext.currentFile(fileURL: fileURL, text: text, selectedRange: selectedTextRange)
+    }
+
     var errorPresented: Binding<Bool> {
         Binding(
             get: { !self.errorMessage.isEmpty },
@@ -78,6 +83,7 @@ final class EditorCoreBridge: ObservableObject {
 
         session.replace(with: openedID)
         fileURL = url
+        selectedTextRange = nil
         syncTextFromCore()
         syncRenderSnapshot()
         syncMarkdownPreviewHTML()
@@ -105,6 +111,7 @@ final class EditorCoreBridge: ObservableObject {
 
         session.replace(with: newID)
         fileURL = nil
+        selectedTextRange = nil
         syncTextFromCore()
         syncRenderSnapshot()
         syncMarkdownPreviewHTML()
@@ -193,6 +200,10 @@ final class EditorCoreBridge: ObservableObject {
         syncRenderSnapshot()
     }
 
+    func setSelectionUTF8Range(_ range: Range<Int>?) {
+        selectedTextRange = range
+    }
+
     func undo() {
         applyHistoryAction(feUndo, emptyMessage: "Nothing to undo")
     }
@@ -208,6 +219,29 @@ final class EditorCoreBridge: ObservableObject {
 
         text = replacement
         replaceText(replacement)
+        selectedTextRange = nil
+        focusRevision += 1
+    }
+
+    func applyAgentReplacement(_ proposedEdit: AgentProposedEdit) {
+        guard hasOpenBuffer else {
+            return
+        }
+
+        if let targetRange = proposedEdit.targetRange {
+            let result = TextEditingPrimitives.replacingUTF8Range(
+                targetRange,
+                in: text,
+                with: proposedEdit.replacementText
+            )
+            text = result.text
+            replaceText(result.text, cursorUTF8Offset: result.cursorUTF8Offset)
+        } else {
+            text = proposedEdit.replacementText
+            replaceText(proposedEdit.replacementText)
+        }
+
+        selectedTextRange = nil
         focusRevision += 1
     }
 

@@ -2,6 +2,12 @@ import Foundation
 
 struct AgentProposedEdit: Equatable {
     var replacementText: String
+    var targetRange: Range<Int>?
+
+    init(replacementText: String, targetRange: Range<Int>? = nil) {
+        self.replacementText = replacementText
+        self.targetRange = targetRange
+    }
 }
 
 enum AgentDiffPreview {

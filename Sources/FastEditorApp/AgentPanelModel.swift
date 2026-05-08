@@ -1,4 +1,5 @@
 import Foundation
+import FastEditorTextEditing
 
 @MainActor
 final class AgentPanelModel: ObservableObject {
@@ -13,6 +14,7 @@ final class AgentPanelModel: ObservableObject {
     private var process: Process?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var submittedContext: AgentContext?
 
     var availableProviders: [AgentProvider] {
         providers.filter(\.available)
@@ -56,16 +58,18 @@ final class AgentPanelModel: ObservableObject {
         }
     }
 
-    func sendCurrentFile(fileURL: URL?, text: String) {
+    func send(context: AgentContext) {
         guard !isRunning, let provider = selectedProvider, let executablePath = provider.executablePath else {
             return
         }
 
-        let request = buildRequest(fileURL: fileURL, text: text)
+        let request = Self.buildRequest(context: context, prompt: prompt)
         let invocation = invocationForProvider(provider, request: request)
         transcript = ""
         proposedEdit = nil
+        submittedContext = context
         appendTranscript("→ \(provider.displayName)\n\n")
+        appendTranscript("\(context.transcriptSummary)\n\n")
         isRunning = true
         statusText = "Running \(provider.displayName)"
 
@@ -131,6 +135,15 @@ final class AgentPanelModel: ObservableObject {
             return nil
         }
 
+        if let targetRange = proposedEdit.targetRange {
+            let original = TextEditingPrimitives.substring(in: currentText, utf8Range: targetRange)
+            return AgentDiffPreview.unifiedPreview(
+                original: original,
+                replacement: proposedEdit.replacementText,
+                path: "\(fileURL?.path ?? "Untitled") selection"
+            )
+        }
+
         return AgentDiffPreview.unifiedPreview(
             original: currentText,
             replacement: proposedEdit.replacementText,
@@ -143,8 +156,7 @@ final class AgentPanelModel: ObservableObject {
         statusText = "Rejected proposed edit"
     }
 
-    private func buildRequest(fileURL: URL?, text: String) -> String {
-        let path = fileURL?.path ?? "Untitled"
+    static func buildRequest(context: AgentContext, prompt: String) -> String {
         let userPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let instruction = userPrompt.isEmpty
             ? "Review this file and summarize useful observations. Do not edit files or run commands."
@@ -153,13 +165,13 @@ final class AgentPanelModel: ObservableObject {
         return """
         \(instruction)
 
-        Current file: \(path)
+        \(context.requestScopeDescription)
 
-        If you propose a file edit, include the complete replacement text in a fenced block named `fast-editor-replacement`.
+        \(context.editInstruction)
         Do not modify files directly.
 
         ```text
-        \(text)
+        \(context.text)
         ```
         """
     }
@@ -205,7 +217,12 @@ final class AgentPanelModel: ObservableObject {
             statusText = "Launch failed"
         }
 
-        proposedEdit = AgentDiffPreview.extractProposedEdit(from: transcript)
+        proposedEdit = AgentDiffPreview.extractProposedEdit(from: transcript).map { edit in
+            AgentProposedEdit(
+                replacementText: edit.replacementText,
+                targetRange: submittedContext?.selection?.utf8Range
+            )
+        }
         if proposedEdit != nil {
             statusText = "Proposed edit ready"
         }

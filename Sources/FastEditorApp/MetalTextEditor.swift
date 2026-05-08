@@ -11,6 +11,7 @@ struct MetalTextEditor: NSViewRepresentable {
     var focusRevision: Int
     var onTextChange: (String, Int) -> Void
     var onCursorMove: (Int) -> Void
+    var onSelectionChange: (Range<Int>?) -> Void
     var onUndo: () -> Void
     var onRedo: () -> Void
 
@@ -24,6 +25,7 @@ struct MetalTextEditor: NSViewRepresentable {
         view.isEditable = isEditable
         view.onTextChange = onTextChange
         view.onCursorMove = onCursorMove
+        view.onSelectionChange = onSelectionChange
         view.onUndo = onUndo
         view.onRedo = onRedo
         view.focus(revision: focusRevision)
@@ -71,6 +73,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
 
     var onTextChange: ((String, Int) -> Void)?
     var onCursorMove: ((Int) -> Void)?
+    var onSelectionChange: ((Range<Int>?) -> Void)?
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
 
@@ -796,6 +799,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
         ensureCursorVisible()
         onTextChange?(text, cursorOffset)
+        onSelectionChange?(selectedUTF8Range)
         setNeedsDisplay(bounds)
     }
 
@@ -804,6 +808,7 @@ final class MetalTextRenderView: MTKView, @preconcurrency NSTextInputClient {
         selectionAnchorOffset = selectionAnchorOffset.map(clampCursorOffset)
         ensureCursorVisible()
         onCursorMove?(cursorOffset)
+        onSelectionChange?(selectedUTF8Range)
         setNeedsDisplay(bounds)
     }
 
