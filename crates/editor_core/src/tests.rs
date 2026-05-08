@@ -798,6 +798,29 @@ fn ffi_inspect_project_tasks_returns_android_task_payload() {
 }
 
 #[test]
+fn ffi_get_project_task_execution_plan_returns_command_payload() {
+    let _guard = ffi_test_lock();
+    let root = make_temp_dir("ffi_get_project_task_execution_plan_returns_command_payload");
+    fs::write(root.join("Package.swift"), "// swift-tools-version: 6.0\n")
+        .expect("write swift package");
+    let path = CString::new(root.to_string_lossy().as_bytes()).expect("ffi path");
+    let provider_id = CString::new("swift_package").expect("provider id");
+    let task_id = CString::new("swift-test").expect("task id");
+
+    let plan = take_ffi_string(fe_get_project_task_execution_plan(
+        path.as_ptr(),
+        provider_id.as_ptr(),
+        task_id.as_ptr(),
+    ));
+
+    assert!(plan.contains("\"provider_id\":\"swift_package\""));
+    assert!(plan.contains("\"task_id\":\"swift-test\""));
+    assert!(plan.contains("\"program\":\"swift\""));
+    assert!(plan.contains("\"args\":[\"test\"]"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn ffi_render_snapshot_includes_tree_sitter_language_and_span_payload() {
     let _guard = ffi_test_lock();
     let cases = [

@@ -32,6 +32,13 @@ func feDetectAgentProviders() -> FeString
 @_silgen_name("fe_inspect_project_tasks")
 func feInspectProjectTasks(_ path: UnsafePointer<CChar>) -> FeString
 
+@_silgen_name("fe_get_project_task_execution_plan")
+func feGetProjectTaskExecutionPlan(
+    _ path: UnsafePointer<CChar>,
+    _ providerID: UnsafePointer<CChar>,
+    _ taskID: UnsafePointer<CChar>
+) -> FeString
+
 @_silgen_name("fe_replace_text")
 func feReplaceText(_ bufferID: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int) -> Int32
 

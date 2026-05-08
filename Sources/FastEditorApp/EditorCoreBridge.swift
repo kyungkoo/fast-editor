@@ -11,11 +11,17 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var renderSnapshot = EditorRenderSnapshot.empty
     @Published private(set) var markdownPreviewHTML = ""
     @Published private(set) var projectTaskSummary = ProjectTaskSummary.empty
+    @Published private(set) var selectedTask: ProjectTaskDefinition?
+    @Published private(set) var selectedTaskPlan: TaskExecutionPlan?
+    @Published private(set) var taskOutput = ""
+    @Published private(set) var taskStatusText = "No task selected"
+    @Published private(set) var isTaskRunning = false
     @Published var text = ""
     @Published var errorMessage = ""
 
     private let session = EditorCoreSession()
     private var isSyncingFromCore = false
+    private var runningTaskProcess: Process?
 
     private var bufferID: UInt64 {
         session.currentBufferID
@@ -77,6 +83,7 @@ final class EditorCoreBridge: ObservableObject {
     func openFolder(url: URL) {
         workspaceURL = url
         syncProjectTaskSummary(for: url)
+        clearSelectedTask()
         statusText = "Opened folder \(url.path)"
     }
 
@@ -196,6 +203,113 @@ final class EditorCoreBridge: ObservableObject {
         focusRevision += 1
     }
 
+    func selectTask(_ task: ProjectTaskDefinition) {
+        guard let workspaceURL else {
+            return
+        }
+
+        let value = workspaceURL.path.withCString { path in
+            task.providerID.rawValue.withCString { providerID in
+                task.id.withCString { taskID in
+                    feGetProjectTaskExecutionPlan(path, providerID, taskID)
+                }
+            }
+        }
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr else {
+            selectedTask = nil
+            selectedTaskPlan = nil
+            taskStatusText = "Task preview failed"
+            reportLastError(prefix: "Task preview failed")
+            return
+        }
+
+        let data = Data(bytes: pointer, count: value.len)
+        do {
+            selectedTask = task
+            selectedTaskPlan = try JSONDecoder().decode(TaskExecutionPlan.self, from: data)
+            taskOutput = ""
+            taskStatusText = "Ready to run \(task.label)"
+        } catch {
+            selectedTask = nil
+            selectedTaskPlan = nil
+            taskStatusText = "Task preview failed"
+            errorMessage = "Task preview failed: \(error.localizedDescription)"
+        }
+    }
+
+    func runSelectedTask() {
+        guard let plan = selectedTaskPlan, !isTaskRunning else {
+            return
+        }
+
+        let process = Process()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.currentDirectoryURL = URL(fileURLWithPath: plan.cwd)
+
+        if plan.program.contains("/") {
+            process.executableURL = URL(fileURLWithPath: plan.program, relativeTo: process.currentDirectoryURL)
+            process.arguments = plan.args
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [plan.program] + plan.args
+        }
+
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        process.environment = ProcessInfo.processInfo.environment
+
+        for entry in plan.environment where entry.count == 2 {
+            process.environment?[entry[0]] = entry[1]
+        }
+
+        taskOutput = "$ \(plan.commandDisplay)\n"
+        taskStatusText = "Running \(selectedTask?.label ?? plan.taskID)"
+        isTaskRunning = true
+        runningTaskProcess = process
+
+        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            Task { @MainActor in
+                self?.appendTaskOutput(data)
+            }
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            Task { @MainActor in
+                self?.appendTaskOutput(data)
+            }
+        }
+        process.terminationHandler = { [weak self, weak outputPipe, weak errorPipe] process in
+            outputPipe?.fileHandleForReading.readabilityHandler = nil
+            errorPipe?.fileHandleForReading.readabilityHandler = nil
+            Task { @MainActor in
+                self?.isTaskRunning = false
+                self?.runningTaskProcess = nil
+                self?.taskStatusText = "Exited with \(process.terminationStatus)"
+                self?.taskOutput += "\n[exited \(process.terminationStatus)]\n"
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            isTaskRunning = false
+            runningTaskProcess = nil
+            taskStatusText = "Task failed to start"
+            taskOutput += "Failed to start: \(error.localizedDescription)\n"
+        }
+    }
+
+    func stopRunningTask() {
+        runningTaskProcess?.terminate()
+        taskStatusText = "Stopping task"
+    }
+
     private func syncTextFromCore() {
         guard hasOpenBuffer else {
             return
@@ -303,6 +417,26 @@ final class EditorCoreBridge: ObservableObject {
         } catch {
             projectTaskSummary = .empty
             errorMessage = "Task inspection failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearSelectedTask() {
+        selectedTask = nil
+        selectedTaskPlan = nil
+        taskOutput = ""
+        taskStatusText = "No task selected"
+        isTaskRunning = false
+        runningTaskProcess = nil
+    }
+
+    private func appendTaskOutput(_ data: Data) {
+        guard !data.isEmpty else {
+            return
+        }
+
+        let text = String(decoding: data, as: UTF8.self)
+        Task { @MainActor in
+            self.taskOutput += text
         }
     }
 

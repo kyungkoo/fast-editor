@@ -170,8 +170,14 @@ struct ContentView: View {
                 }
 
                 ForEach(editor.projectTaskSummary.tasks) { task in
-                    Label(task.label, systemImage: taskIcon(for: task.kind))
-                        .help(task.detail ?? task.id)
+                    Button {
+                        editor.selectTask(task)
+                    } label: {
+                        Label(task.label, systemImage: taskIcon(for: task.kind))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .help(task.detail ?? task.id)
                 }
 
                 if let android = editor.projectTaskSummary.android {
@@ -182,10 +188,52 @@ struct ContentView: View {
                     Label(android.project.hasGradleWrapper ? "Gradle wrapper found" : "Gradle wrapper missing",
                           systemImage: android.project.hasGradleWrapper ? "checkmark.circle" : "exclamationmark.triangle")
                 }
+
+                if let plan = editor.selectedTaskPlan {
+                    Divider()
+                    taskPreview(plan)
+                }
             }
         }
         .font(.callout)
         .padding(12)
+    }
+
+    private func taskPreview(_ plan: TaskExecutionPlan) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(plan.commandDisplay)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .lineLimit(3)
+
+            HStack {
+                Button(editor.isTaskRunning ? "Stop" : "Run") {
+                    if editor.isTaskRunning {
+                        editor.stopRunningTask()
+                    } else {
+                        editor.runSelectedTask()
+                    }
+                }
+
+                Spacer()
+
+                Text(editor.taskStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if !editor.taskOutput.isEmpty {
+                ScrollView {
+                    Text(editor.taskOutput)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .background(Color(nsColor: .textBackgroundColor))
+            }
+        }
     }
 
     private func taskIcon(for kind: TaskKind) -> String {

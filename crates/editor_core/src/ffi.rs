@@ -274,6 +274,40 @@ pub extern "C" fn fe_inspect_project_tasks(path: *const c_char) -> FeString {
 }
 
 #[no_mangle]
+pub extern "C" fn fe_get_project_task_execution_plan(
+    path: *const c_char,
+    provider_id: *const c_char,
+    task_id: *const c_char,
+) -> FeString {
+    let result = path_from_c(path)
+        .and_then(|path| {
+            let provider_id = task_provider_id_from_c(provider_id)?;
+            let task_id = string_from_c(task_id)?;
+            Ok((path, provider_id, task_id))
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|(path, provider_id, task_id)| {
+            let registry = builtin_task_providers();
+            let plan = registry
+                .execution_plan(&provider_id, &path, &task_id)
+                .map_err(|error| error.to_string())?;
+
+            serde_json::to_string(&plan).map_err(|error| error.to_string())
+        });
+
+    match result {
+        Ok(plan) => {
+            clear_last_error();
+            FeString::from_string(plan)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn fe_replace_text(buffer_id: BufferId, text_ptr: *const u8, len: usize) -> i32 {
     replace_text(buffer_id, text_ptr, len, None)
 }
@@ -382,6 +416,27 @@ fn replace_text(
             set_last_error(error);
             0
         }
+    }
+}
+
+fn string_from_c(value: *const c_char) -> Result<String, EditorError> {
+    if value.is_null() {
+        return Err(EditorError::InvalidUtf8);
+    }
+
+    let value = unsafe { CStr::from_ptr(value) };
+    value
+        .to_str()
+        .map(ToOwned::to_owned)
+        .map_err(|_| EditorError::InvalidUtf8)
+}
+
+fn task_provider_id_from_c(value: *const c_char) -> Result<TaskProviderId, EditorError> {
+    match string_from_c(value)?.as_str() {
+        "android" => Ok(TaskProviderId::Android),
+        "swift_package" => Ok(TaskProviderId::SwiftPackage),
+        "web" => Ok(TaskProviderId::Web),
+        _ => Err(EditorError::InvalidPath),
     }
 }
 

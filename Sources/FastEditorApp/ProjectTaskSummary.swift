@@ -40,6 +40,28 @@ struct ProjectTaskDefinition: Decodable, Equatable, Identifiable {
     }
 }
 
+struct TaskExecutionPlan: Decodable, Equatable {
+    var providerID: TaskProviderID
+    var taskID: String
+    var program: String
+    var args: [String]
+    var cwd: String
+    var environment: [[String]]
+
+    var commandDisplay: String {
+        ([program] + args).map(shellQuote).joined(separator: " ")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerID = "provider_id"
+        case taskID = "task_id"
+        case program
+        case args
+        case cwd
+        case environment
+    }
+}
+
 enum TaskProviderID: String, Decodable, Equatable {
     case android
     case swiftPackage = "swift_package"
@@ -69,6 +91,14 @@ enum TaskKind: String, Decodable, Equatable {
     case test
     case script
     case other
+}
+
+private func shellQuote(_ value: String) -> String {
+    if value.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "\"'"))) == nil {
+        return value
+    }
+
+    return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
 }
 
 struct AndroidTaskSummary: Decodable, Equatable {

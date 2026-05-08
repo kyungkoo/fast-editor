@@ -52,4 +52,25 @@ struct ProjectTaskSummaryTests {
         #expect(summary.android?.environment.sdkLocation == "/opt/android-sdk")
         #expect(summary.android?.project.hasGradleWrapper == true)
     }
+
+    @Test func decodesTaskExecutionPlanPayload() throws {
+        let payload = """
+        {
+          "provider_id": "swift_package",
+          "task_id": "swift-test",
+          "program": "swift",
+          "args": ["test"],
+          "cwd": "/tmp/project",
+          "environment": []
+        }
+        """.data(using: .utf8)!
+
+        let plan = try JSONDecoder().decode(TaskExecutionPlan.self, from: payload)
+
+        #expect(plan.providerID == .swiftPackage)
+        #expect(plan.taskID == "swift-test")
+        #expect(plan.program == "swift")
+        #expect(plan.args == ["test"])
+        #expect(plan.commandDisplay == "swift test")
+    }
 }
