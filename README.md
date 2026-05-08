@@ -37,7 +37,11 @@ building, running, and testing from Zed. See `docs/zed-development.md`.
 
 - Open a UTF-8 text file from the macOS shell.
 - Store and edit file contents through the Rust `editor_core`.
+- Render and edit text in the Metal-backed editor surface.
 - Save edits back to disk.
-
-Metal rendering, Markdown preview, and AI agent integration are intentionally
-left for follow-up slices.
+- Highlight Markdown, Swift, Rust, and Kotlin syntax from Rust render spans.
+- Preview Markdown from the current unsaved buffer state.
+- Detect external AI CLIs, stream agent output, and preview proposed diffs
+  before applying them.
+- Model build/run/test integrations behind the Rust `task_core` provider
+  abstraction.

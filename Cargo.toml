@@ -1,4 +1,3 @@
 [workspace]
-members = ["crates/editor_core"]
+members = ["crates/editor_core", "crates/task_core"]
 resolver = "2"
-
