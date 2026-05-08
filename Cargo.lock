@@ -27,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "task_core",
  "tree-sitter",
  "tree-sitter-kotlin-sg",
  "tree-sitter-rust",

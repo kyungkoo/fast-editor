@@ -144,9 +144,63 @@ struct ContentView: View {
             .font(.callout)
             .padding(12)
 
+            if editor.workspaceURL != nil {
+                Divider()
+                taskSection
+            }
+
             Spacer()
         }
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private var taskSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tasks")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if editor.projectTaskSummary.detections.isEmpty {
+                Label("No build provider detected", systemImage: "hammer")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(editor.projectTaskSummary.detections) { detection in
+                    Label(detection.providerID.displayName, systemImage: "checkmark.circle")
+                        .help(detection.evidence.joined(separator: ", "))
+                }
+
+                ForEach(editor.projectTaskSummary.tasks) { task in
+                    Label(task.label, systemImage: taskIcon(for: task.kind))
+                        .help(task.detail ?? task.id)
+                }
+
+                if let android = editor.projectTaskSummary.android {
+                    Divider()
+
+                    Label(android.environment.sdkLocation == nil ? "Android SDK missing" : "Android SDK found",
+                          systemImage: android.environment.sdkLocation == nil ? "exclamationmark.triangle" : "checkmark.circle")
+                    Label(android.project.hasGradleWrapper ? "Gradle wrapper found" : "Gradle wrapper missing",
+                          systemImage: android.project.hasGradleWrapper ? "checkmark.circle" : "exclamationmark.triangle")
+                }
+            }
+        }
+        .font(.callout)
+        .padding(12)
+    }
+
+    private func taskIcon(for kind: TaskKind) -> String {
+        switch kind {
+        case .build:
+            "hammer"
+        case .run:
+            "play"
+        case .test:
+            "checklist"
+        case .script:
+            "terminal"
+        case .other:
+            "gearshape"
+        }
     }
 
     private func openFile() {

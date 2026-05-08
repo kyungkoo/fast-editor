@@ -774,6 +774,30 @@ fn ffi_detect_agent_providers_returns_provider_payload() {
 }
 
 #[test]
+fn ffi_inspect_project_tasks_returns_android_task_payload() {
+    let _guard = ffi_test_lock();
+    let root = make_temp_dir("ffi_inspect_project_tasks_returns_android_task_payload");
+    fs::create_dir_all(root.join("app/src/main")).expect("create android sample dirs");
+    fs::write(root.join("settings.gradle.kts"), "pluginManagement {}\n").expect("write settings");
+    fs::write(root.join("gradlew"), "").expect("write gradle wrapper");
+    fs::write(root.join("app/build.gradle.kts"), "plugins {}\n").expect("write module gradle");
+    fs::write(
+        root.join("app/src/main/AndroidManifest.xml"),
+        "<manifest />\n",
+    )
+    .expect("write manifest");
+    let path = CString::new(root.to_string_lossy().as_bytes()).expect("ffi path");
+
+    let summary = take_ffi_string(fe_inspect_project_tasks(path.as_ptr()));
+
+    assert!(summary.contains("\"provider_id\":\"android\""));
+    assert!(summary.contains("\"id\":\"android-build\""));
+    assert!(summary.contains("\"id\":\"android-run\""));
+    assert!(summary.contains("\"has_gradle_wrapper\":true"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn ffi_render_snapshot_includes_tree_sitter_language_and_span_payload() {
     let _guard = ffi_test_lock();
     let cases = [

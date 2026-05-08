@@ -10,6 +10,7 @@ final class EditorCoreBridge: ObservableObject {
     @Published private(set) var focusRevision = 0
     @Published private(set) var renderSnapshot = EditorRenderSnapshot.empty
     @Published private(set) var markdownPreviewHTML = ""
+    @Published private(set) var projectTaskSummary = ProjectTaskSummary.empty
     @Published var text = ""
     @Published var errorMessage = ""
 
@@ -75,6 +76,7 @@ final class EditorCoreBridge: ObservableObject {
 
     func openFolder(url: URL) {
         workspaceURL = url
+        syncProjectTaskSummary(for: url)
         statusText = "Opened folder \(url.path)"
     }
 
@@ -279,6 +281,29 @@ final class EditorCoreBridge: ObservableObject {
 
         let path = String(decoding: UnsafeBufferPointer(start: pointer, count: value.len), as: UTF8.self)
         fileURL = URL(fileURLWithPath: path)
+    }
+
+    private func syncProjectTaskSummary(for url: URL) {
+        let value = url.path.withCString { path in
+            feInspectProjectTasks(path)
+        }
+        defer {
+            feFreeString(value)
+        }
+
+        guard let pointer = value.ptr else {
+            projectTaskSummary = .empty
+            reportLastError(prefix: "Task inspection failed")
+            return
+        }
+
+        let data = Data(bytes: pointer, count: value.len)
+        do {
+            projectTaskSummary = try JSONDecoder().decode(ProjectTaskSummary.self, from: data)
+        } catch {
+            projectTaskSummary = .empty
+            errorMessage = "Task inspection failed: \(error.localizedDescription)"
+        }
     }
 
     private func replaceText(_ newText: String) {

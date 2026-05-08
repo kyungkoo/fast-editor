@@ -5,6 +5,23 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
+use task_core::{
+    builtin_task_providers, AndroidEnvironmentInspection, AndroidProjectDescription,
+    AndroidProvider, ProjectDetection, TaskDefinition, TaskProviderId,
+};
+
+#[derive(serde::Serialize)]
+struct ProjectTaskSummary {
+    detections: Vec<ProjectDetection>,
+    tasks: Vec<TaskDefinition>,
+    android: Option<AndroidTaskSummary>,
+}
+
+#[derive(serde::Serialize)]
+struct AndroidTaskSummary {
+    environment: AndroidEnvironmentInspection,
+    project: AndroidProjectDescription,
+}
 
 #[repr(C)]
 pub struct FeString {
@@ -207,6 +224,47 @@ pub extern "C" fn fe_detect_agent_providers() -> FeString {
         Ok(providers) => {
             clear_last_error();
             FeString::from_string(providers)
+        }
+        Err(error) => {
+            set_last_error(error);
+            FeString::empty()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fe_inspect_project_tasks(path: *const c_char) -> FeString {
+    let result = path_from_c(path)
+        .map_err(|error| error.to_string())
+        .and_then(|path| {
+            let registry = builtin_task_providers();
+            let detections = registry.detect_project(&path);
+            let tasks = registry
+                .list_project_tasks(&path)
+                .map_err(|error| error.to_string())?;
+            let android = detections
+                .iter()
+                .any(|detection| detection.provider_id == TaskProviderId::Android)
+                .then(|| {
+                    let provider = AndroidProvider;
+                    AndroidTaskSummary {
+                        environment: provider.inspect_environment(&path),
+                        project: provider.describe_project_shape(&path),
+                    }
+                });
+
+            serde_json::to_string(&ProjectTaskSummary {
+                detections,
+                tasks,
+                android,
+            })
+            .map_err(|error| error.to_string())
+        });
+
+    match result {
+        Ok(summary) => {
+            clear_last_error();
+            FeString::from_string(summary)
         }
         Err(error) => {
             set_last_error(error);
